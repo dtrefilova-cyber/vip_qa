@@ -1,3 +1,5 @@
-"""Сумісність із Main file path Streamlit Cloud."""
+"""Точка входу Streamlit Cloud (Main file path)."""
 
-import app  # noqa: F401
+from vip_ui import render_call_entry_page
+
+render_call_entry_page("Короткий")
