@@ -1,0 +1,1 @@
+"""VIP Short scoring package."""
