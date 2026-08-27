@@ -1,5 +1,11 @@
 streamlit
 openai
 deepgram-sdk
+pandas
+openpyxl
 gspread
-supabase
+google-auth
+supabase>=2.10.0
+plotly
+python-dotenv
+requests
