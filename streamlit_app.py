@@ -1,4 +1,3 @@
-import streamlit as st
+"""Сумісність із Main file path Streamlit Cloud."""
 
-st.set_page_config(page_title="VIP QA", layout="wide")
-st.title("VIP QA — в розробці")
+import app  # noqa: F401
