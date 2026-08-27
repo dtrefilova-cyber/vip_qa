@@ -1,2 +1,20 @@
+[server]
+fileWatcherType = "none"
+
+[runner]
+fastReruns = false
+
+[client]
+showSidebarNavigation = false
+toolbarMode = "minimal"
+
 [theme]
 base = "light"
+primaryColor = "#6D4AFF"
+backgroundColor = "#F6F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#111827"
+font = "sans serif"
+
+# In-app Light/Dark toggle (session) overrides presentation via CSS variables.
+# Streamlit base theme above is the light default seed.
