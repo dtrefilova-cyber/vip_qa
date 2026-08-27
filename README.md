@@ -14,7 +14,7 @@ Streamlit-застосунок оцінки коротких VIP-дзвінкі�
 ## Деплой (Streamlit Cloud)
 
 - **Repository:** `dtrefilova-cyber/vip_qa`
-- **Branch:** `feature/vip-structure-qa10-style` (для тесту) або `main` після мерджу
-- **Main file path:** `streamlit_app.py` (або `app.py`)
+- **Branch:** `main`
+- **Main file path:** `streamlit_app.py`
 
 Секрети: `DEEPGRAM_API_KEY`, `OPENAI_API_KEY`, `gcp_service_account`, `SUPABASE_URL`, ключ Supabase.

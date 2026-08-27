@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -52,6 +53,44 @@ _SIDEBAR_TOGGLE_JS = """
 """
 
 
+def home_page_path() -> str:
+    """Файл головної сторінки = той скрипт, який реально запустив Streamlit.
+
+    Cloud у цьому репо стартує з streamlit_app.py, локально часто з app.py.
+    st.page_link('app.py') падає, якщо main file path інший.
+    """
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import (
+            get_script_run_ctx,
+        )
+
+        ctx = get_script_run_ctx()
+        if ctx and getattr(ctx, "main_script_path", None):
+            name = Path(ctx.main_script_path).name
+            if name:
+                return name
+    except Exception:
+        pass
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        ctx = get_script_run_ctx()
+        if ctx and getattr(ctx, "main_script_path", None):
+            name = Path(ctx.main_script_path).name
+            if name:
+                return name
+    except Exception:
+        pass
+    return "streamlit_app.py"
+
+
+def _page_link_target(item: dict) -> str:
+    page = str(item.get("page") or "")
+    if item.get("id") == "short" or page in {"__home__", "app.py", "streamlit_app.py"}:
+        return home_page_path()
+    return page
+
+
 def setup_page(title: str, *, active: str) -> str:
     st.set_page_config(
         page_title=f"VIP QA — {title}",
@@ -88,7 +127,7 @@ def render_sidebar(*, active: str) -> str:
         render_theme_toggle()
         for item in NAV_ITEMS:
             label = f"{item['icon']} {item['label']}"
-            st.page_link(item["page"], label=label, use_container_width=True)
+            st.page_link(_page_link_target(item), label=label, use_container_width=True)
         st.caption("QA менеджер")
         sync_select_state("qa_manager_global", QA_MANAGERS)
         qa_manager = st.selectbox(
