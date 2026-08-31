@@ -9,11 +9,12 @@ import streamlit as st
 from constants import (
     CALL_TYPE_FRIENDLY,
     CALL_TYPE_SHORT_90S,
+    VIP_BONUS_STATUS_OPTIONS,
     page_slug,
 )
 from ui_theme import clean_select_options, status_pill_html, sync_select_state
 
-GRID_COLUMNS = 3
+GRID_COLUMNS = 2
 
 
 def _slug(call_type: str) -> str:
@@ -39,7 +40,6 @@ def initial_cards() -> list[dict]:
     return [
         {"id": 1, "number": 1, "expanded": True},
         {"id": 2, "number": 2, "expanded": True},
-        {"id": 3, "number": 3, "expanded": True},
     ]
 
 
@@ -47,7 +47,7 @@ def ensure_card_state(call_type: str) -> list[dict]:
     keys = _keys(_slug(call_type))
     if keys["cards"] not in st.session_state:
         st.session_state[keys["cards"]] = initial_cards()
-        st.session_state[keys["next_id"]] = 4
+        st.session_state[keys["next_id"]] = 3
     if keys["errors"] not in st.session_state:
         st.session_state[keys["errors"]] = {}
     if keys["pending"] not in st.session_state:
@@ -98,11 +98,13 @@ def _has_url(call_type: str, card_id: int) -> bool:
 
 
 def required_errors(call_type: str, card_id: int, projects_list: list) -> dict[str, str]:
-    _ = projects_list
     slug = _slug(call_type)
     errors = {}
     if not _has_url(call_type, card_id):
         errors["url"] = "Вкажіть посилання на дзвінок"
+    if not str(st.session_state.get(_fk(slug, "project", card_id)) or "").strip():
+        if projects_list:
+            errors["project"] = "Оберіть проєкт"
     if not str(st.session_state.get(_fk(slug, "manager", card_id)) or "").strip():
         errors["ret_manager"] = "Оберіть менеджера"
     if not str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip():
@@ -125,7 +127,7 @@ def collect_card_call(
     manager_meta = manager_lookup.get(ret_manager, {})
     call_date_raw = st.session_state.get(_date_key(call_type, card_id))
     call_date = call_date_raw.strftime("%d.%m.%Y") if call_date_raw else ""
-    project = str(manager_meta.get("project") or "").strip()
+    project = str(st.session_state.get(_fk(slug, "project", card_id)) or manager_meta.get("project") or "").strip()
     betking_x2 = project.lower() == "betking"
     selected_type = CALL_TYPE_FRIENDLY if call_type == CALL_TYPE_FRIENDLY else CALL_TYPE_SHORT_90S
     return {
@@ -135,10 +137,13 @@ def collect_card_call(
         "tl": manager_meta.get("tl", ""),
         "client_id": str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip(),
         "call_date": call_date,
+        "bonus_status": str(st.session_state.get(_fk(slug, "bonus", card_id)) or "").strip(),
         "qa_comment": str(st.session_state.get(_fk(slug, "comment", card_id)) or "").strip(),
         "important_note": str(st.session_state.get(_fk(slug, "important", card_id)) or "").strip(),
+        "previous_call_not_service": bool(st.session_state.get(_fk(slug, "prev_not_service", card_id))),
+        "has_tl_permission": bool(st.session_state.get(_fk(slug, "tl_perm", card_id))),
         "vip_call_type": selected_type,
-        "client_is_military": bool(st.session_state.get(_fk(slug, "military", card_id))),
+        "client_is_military": False,
         "betking_x2_applicable": betking_x2,
         "qa_manager": qa_manager,
     }
@@ -233,6 +238,16 @@ def _delete_card(call_type: str, card_id: int) -> None:
     ]
 
 
+def _managers_for_project(managers_config: list, project: str) -> list[str]:
+    if not project:
+        return clean_select_options(m.get("manager") for m in managers_config)
+    return clean_select_options(
+        m.get("manager")
+        for m in managers_config
+        if str(m.get("project") or "").strip() == project
+    )
+
+
 def render_vip_card(
     card: dict,
     *,
@@ -246,8 +261,7 @@ def render_vip_card(
     title = card_title(number)
     slug = _slug(call_type)
     errors = dict((st.session_state.get(_keys(slug)["errors"]) or {}).get(card_id) or {})
-    manager_names = clean_select_options(m.get("manager") for m in managers_config)
-    is_friendly = call_type == CALL_TYPE_FRIENDLY
+    projects = clean_select_options(projects_list)
 
     with st.container(border=True, key=f"ret_card_{slug}_{card_id}"):
         st.markdown('<div class="upload-call-card-marker"></div>', unsafe_allow_html=True)
@@ -288,7 +302,26 @@ def render_vip_card(
 
         left, right = _field_cols()
         with left:
-            _field_label("👤", "Менеджер VIP")
+            _field_label("📁", "Проєкт")
+        with right:
+            pk = _fk(slug, "project", card_id)
+            sync_select_state(pk, projects)
+            st.selectbox(
+                "Проєкт",
+                projects,
+                index=None,
+                placeholder="Оберіть проєкт",
+                key=pk,
+                disabled=analyzing or not projects,
+                label_visibility="collapsed",
+            )
+
+        selected_project = str(st.session_state.get(_fk(slug, "project", card_id)) or "").strip()
+        manager_names = _managers_for_project(managers_config, selected_project)
+
+        left, right = _field_cols()
+        with left:
+            _field_label("👤", "Менеджер проєкту")
         with right:
             mk = _fk(slug, "manager", card_id)
             sync_select_state(mk, manager_names)
@@ -326,22 +359,25 @@ def render_vip_card(
                 label_visibility="collapsed",
             )
 
-        if is_friendly:
-            st.checkbox(
-                "Клієнт військовий",
-                key=_fk(slug, "military", card_id),
+        left, right = _field_cols()
+        with left:
+            _field_label("🎁", "Бонус")
+        with right:
+            bk = _fk(slug, "bonus", card_id)
+            sync_select_state(bk, VIP_BONUS_STATUS_OPTIONS)
+            st.selectbox(
+                "Бонус",
+                VIP_BONUS_STATUS_OPTIONS,
+                index=None,
+                placeholder="Статус нарахування",
+                key=bk,
                 disabled=analyzing,
-                help="Впливає на критерій «Заклик до гри» (не питаємо «чому» після відмови).",
+                label_visibility="collapsed",
             )
 
         left, right = _field_cols(tall=True)
         with left:
-            label = (
-                "Коментар попереднього контакту / Важливе"
-                if is_friendly
-                else "Важливе / попередній контакт"
-            )
-            _field_label("🚩", label, tall=True)
+            _field_label("🚩", "Важливе", tall=True)
         with right:
             st.text_area(
                 "Важливе",
@@ -353,7 +389,7 @@ def render_vip_card(
 
         left, right = _field_cols(tall=True)
         with left:
-            _field_label("💬", "Коментар по цьому дзвінку", tall=True)
+            _field_label("💬", "Коментар до дзвінка", tall=True)
         with right:
             st.text_area(
                 "Коментар",
@@ -362,6 +398,17 @@ def render_vip_card(
                 label_visibility="collapsed",
                 disabled=analyzing,
             )
+
+        st.checkbox(
+            "Попередній дзвінок не був сервісним",
+            key=_fk(slug, "prev_not_service", card_id),
+            disabled=analyzing,
+        )
+        st.checkbox(
+            "Є дозвіл ТЛ на дзвінок без структури",
+            key=_fk(slug, "tl_perm", card_id),
+            disabled=analyzing,
+        )
 
         invalid = required_errors(call_type, card_id, projects_list)
         if errors:
@@ -390,7 +437,7 @@ def render_vip_card(
 def handle_add_card(call_type: str) -> None:
     slug = _slug(call_type)
     keys = _keys(slug)
-    next_id = int(st.session_state.get(keys["next_id"]) or 4)
+    next_id = int(st.session_state.get(keys["next_id"]) or 3)
     cards = st.session_state[keys["cards"]]
     cards.append({"id": next_id, "number": next_id, "expanded": True})
     st.session_state[keys["next_id"]] = next_id + 1

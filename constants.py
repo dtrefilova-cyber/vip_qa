@@ -59,28 +59,35 @@ PAGE_SLUGS = {
     CALL_TYPE_KEY_FRIENDLY: "friendly",
 }
 
-# Поля картки за типом (інформаційний конфіг; рендер у upload_cards)
+# Поля картки — однакові для обох типів (інформаційні; на бал не впливають, окрім контексту Friendly)
 CARD_FIELDS_BY_TYPE = {
     CALL_TYPE_KEY_SHORT: [
         "url",
+        "project",
         "ret_manager",
         "client_id",
         "call_date",
+        "bonus_status",
         "important_note",
         "qa_comment",
+        "previous_call_not_service",
+        "has_tl_permission",
     ],
     CALL_TYPE_KEY_FRIENDLY: [
         "url",
+        "project",
         "ret_manager",
         "client_id",
         "call_date",
+        "bonus_status",
         "important_note",
         "qa_comment",
-        "client_is_military",
+        "previous_call_not_service",
+        "has_tl_permission",
     ],
 }
 
-# Залишено для сумісності імпортів; поля старої red/green картки більше не використовуються в скорингу.
+# Інформаційні поля картки (не впливають на бальний скоринг).
 VIP_BONUS_STATUS_OPTIONS = [
     "Бонус нараховано вірно",
     "Бонус нараховано невірно",

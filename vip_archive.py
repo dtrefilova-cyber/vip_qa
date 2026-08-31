@@ -165,12 +165,20 @@ def fetch_vip_summary(
     type_key: str | None = None,
 ) -> tuple[dict, int, str | None]:
     rows, err = fetch_vip_day_rows(check_date_iso)
+    empty = {
+        "total": 0,
+        "avg_percent": None,
+        "high": 0,
+        "mid": 0,
+        "low": 0,
+        "critical": 0,
+    }
     if err and not rows:
-        return {"total": 0, "avg_percent": None, "critical": 0}, 0, err
+        return empty, 0, err
     rows = _filter_rows(rows, type_key)
     total = len(rows)
-    percents = []
-    critical = 0
+    percents: list[float] = []
+    high = mid = low = critical = 0
     for row in rows:
         pct = row.get("percent")
         is_crit = row.get("is_critical_fail")
@@ -181,17 +189,27 @@ def fetch_vip_summary(
             pct = score.get("percent")
         if is_crit:
             critical += 1
+        pct_f = None
         if pct is not None:
             try:
-                percents.append(float(pct))
-                continue
+                pct_f = float(pct)
             except (TypeError, ValueError):
-                pass
-        verdict = str(row.get("verdict") or "").lower()
-        if verdict == "green":
-            percents.append(100.0)
-        elif verdict == "red":
-            percents.append(0.0)
+                pct_f = None
+        if pct_f is None:
+            verdict = str(row.get("verdict") or "").lower()
+            if verdict == "green":
+                pct_f = 100.0
+            elif verdict == "red":
+                pct_f = 0.0
+        if pct_f is None:
+            continue
+        percents.append(pct_f)
+        if is_crit or pct_f < 50:
+            low += 1
+        elif pct_f >= 80:
+            high += 1
+        else:
+            mid += 1
     avg_percent = round(sum(percents) / len(percents), 1) if percents else None
 
     today_rows, today_err = fetch_vip_day_rows(today_iso)
@@ -200,6 +218,9 @@ def fetch_vip_summary(
     return {
         "total": total,
         "avg_percent": avg_percent,
+        "high": high,
+        "mid": mid,
+        "low": low,
         "critical": critical,
     }, today_count, err or today_err
 
@@ -316,6 +337,12 @@ def _archive_keys(slug: str) -> tuple[str, str]:
     return f"vip_archive_page_{slug}", f"vip_archive_day_{slug}"
 
 
+def _pct_of(part: int, total: int) -> str:
+    if not total:
+        return "0.0%"
+    return f"{part / total * 100:.1f}%"
+
+
 def render_kpi_row(
     *,
     call_type: str,
@@ -326,28 +353,21 @@ def render_kpi_row(
 ) -> None:
     from ui_theme import render_stat_cards
 
+    _ = call_type
     total = int(counts.get("total") or 0)
-    avg = counts.get("avg_percent")
-    critical = int(counts.get("critical") or 0)
+    high = int(counts.get("high") or 0)
+    mid = int(counts.get("mid") or 0)
+    low = int(counts.get("low") or 0)
     date_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else "—"
-    today_label = today_kyiv().strftime("%d.%m.%Y")
-    avg_label = f"{avg}%" if avg is not None else "—"
-    type_key = resolve_call_type_key(call_type)
-    is_friendly = type_key == CALL_TYPE_KEY_FRIENDLY
-    type_short = "Friendly" if is_friendly else "Короткий 90с"
-    cards = [
-        ("📞", "primary", str(total), "Всього дзвінків", date_label),
-        ("★", "primary", avg_label, "Середній %", "по бальній рубриці"),
-    ]
-    if not is_friendly:
-        cards.append(("⛔", "rose", str(critical), "Критичні", "Короткий 90 сек"))
-    cards.extend(
+    # Три показники замість GREEN/RED: розподіл за % бала
+    render_stat_cards(
         [
-            ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
-            ("🎧", "primary", type_short, "Тип дзвінка", call_type),
+            ("★", "green", str(high), "Високий ≥80%", _pct_of(high, total)),
+            ("●", "amber", str(mid), "Середній 50–79%", _pct_of(mid, total)),
+            ("●", "red", str(low), "Низький <50%", _pct_of(low, total)),
         ]
     )
-    render_stat_cards(cards)
+    st.caption(f"Всього за {date_label}: {total} · Опрацьовано сьогодні: {today_count}")
     if counts_error:
         ok, _ = get_supabase_health()
         if ok:
@@ -423,17 +443,18 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
 
     st.markdown("### Архів")
     day_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else check_iso
+    high = int(summary.get("high") or 0)
+    mid = int(summary.get("mid") or 0)
+    low = int(summary.get("low") or 0)
     avg = summary.get("avg_percent")
-    critical = int(summary.get("critical") or 0)
-    avg_txt = f"{avg}% середній" if avg is not None else "немає % для бальних"
+    avg_txt = f"{avg}% середній" if avg is not None else "—"
     type_note = call_type
-    crit_part = f" · {critical} критичних" if type_key == CALL_TYPE_KEY_SHORT else ""
     st.markdown(
         f"""
         <div class="archive-summary">
           <div>
             <h4>Аналізи за {day_label}</h4>
-            <p>{archive_total} дзвінків · {avg_txt}{crit_part} · {type_note}</p>
+            <p>{archive_total} дзвінків · {avg_txt} · ≥80%: {high} · 50–79%: {mid} · &lt;50%: {low} · {type_note}</p>
           </div>
         </div>
         """,
