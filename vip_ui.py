@@ -18,13 +18,13 @@ CALL_PAGE_META = {
         "active": "short",
         "title": "Короткі дзвінки",
         "heading": "Короткі дзвінки",
-        "caption": "Завантаження та аналіз коротких дзвінків VIP (Короткий 90 сек, макс. 30)",
+        "caption": "Таймінг — 30–90 с · Максимальний бал за дзвінок — 30",
     },
     CALL_TYPE_FRIENDLY: {
         "active": "friendly",
         "title": "VIP Friendly (2-й дзвінок)",
         "heading": "VIP Friendly (2-й дзвінок)",
-        "caption": "Завантаження та аналіз дзвінків VIP Friendly (2-й дзвінок клієнту)",
+        "caption": "Завантаження та аналіз дзвінків VIP Friendly · Максимальний бал за дзвінок — 60",
     },
 }
 

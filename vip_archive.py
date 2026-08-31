@@ -10,6 +10,7 @@ from constants import (
     CALL_TYPE_FRIENDLY,
     CALL_TYPE_KEY_FRIENDLY,
     CALL_TYPE_KEY_SHORT,
+    CALL_TYPE_MAX_SCORE,
     CALL_TYPE_SHORT_90S,
     resolve_call_type_key,
 )
@@ -168,6 +169,8 @@ def fetch_vip_summary(
     empty = {
         "total": 0,
         "avg_percent": None,
+        "avg_score": None,
+        "max_score": None,
         "high": 0,
         "mid": 0,
         "low": 0,
@@ -178,7 +181,9 @@ def fetch_vip_summary(
     rows = _filter_rows(rows, type_key)
     total = len(rows)
     percents: list[float] = []
+    scores: list[float] = []
     high = mid = low = critical = 0
+    type_max = CALL_TYPE_MAX_SCORE.get(type_key or "", None)
     for row in rows:
         pct = row.get("percent")
         is_crit = row.get("is_critical_fail")
@@ -187,6 +192,17 @@ def fetch_vip_summary(
             is_crit = score.get("is_critical_fail")
         if pct is None:
             pct = score.get("percent")
+        raw_score = row.get("total_score")
+        if raw_score is None:
+            raw_score = score.get("total_score")
+        row_max = row.get("max_score")
+        if row_max is None:
+            row_max = score.get("max_score")
+        if row_max is not None:
+            try:
+                type_max = float(row_max)
+            except (TypeError, ValueError):
+                pass
         if is_crit:
             critical += 1
         pct_f = None
@@ -195,22 +211,37 @@ def fetch_vip_summary(
                 pct_f = float(pct)
             except (TypeError, ValueError):
                 pct_f = None
-        if pct_f is None:
+        score_f = None
+        if raw_score is not None:
+            try:
+                score_f = float(raw_score)
+            except (TypeError, ValueError):
+                score_f = None
+        if pct_f is None and score_f is None:
             verdict = str(row.get("verdict") or "").lower()
             if verdict == "green":
                 pct_f = 100.0
+                if type_max is not None:
+                    score_f = float(type_max)
             elif verdict == "red":
                 pct_f = 0.0
-        if pct_f is None:
-            continue
-        percents.append(pct_f)
-        if is_crit or pct_f < 50:
-            low += 1
-        elif pct_f >= 80:
-            high += 1
-        else:
-            mid += 1
+                score_f = 0.0
+        if score_f is None and pct_f is not None and type_max is not None:
+            score_f = round(pct_f / 100.0 * float(type_max), 1)
+        if pct_f is None and score_f is not None and type_max:
+            pct_f = round(score_f / float(type_max) * 100, 1)
+        if pct_f is not None:
+            percents.append(pct_f)
+            if is_crit or pct_f < 50:
+                low += 1
+            elif pct_f >= 80:
+                high += 1
+            else:
+                mid += 1
+        if score_f is not None:
+            scores.append(score_f)
     avg_percent = round(sum(percents) / len(percents), 1) if percents else None
+    avg_score = round(sum(scores) / len(scores), 1) if scores else None
 
     today_rows, today_err = fetch_vip_day_rows(today_iso)
     today_rows = _filter_rows(today_rows, type_key)
@@ -218,6 +249,8 @@ def fetch_vip_summary(
     return {
         "total": total,
         "avg_percent": avg_percent,
+        "avg_score": avg_score,
+        "max_score": type_max,
         "high": high,
         "mid": mid,
         "low": low,
@@ -347,16 +380,26 @@ def render_kpi_row(
 ) -> None:
     from ui_theme import render_stat_cards
 
-    _ = call_type
     total = int(counts.get("total") or 0)
-    avg = counts.get("avg_percent")
+    avg_score = counts.get("avg_score")
+    max_score = counts.get("max_score")
+    if max_score is None:
+        max_score = CALL_TYPE_MAX_SCORE.get(resolve_call_type_key(call_type) or call_type)
     date_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else "—"
     today_label = today_kyiv().strftime("%d.%m.%Y")
-    avg_label = f"{avg}%" if avg is not None else "—"
+    if avg_score is not None and max_score is not None:
+        avg_label = f"{avg_score:g} / {float(max_score):g}"
+        avg_sub = "середній бал"
+    elif avg_score is not None:
+        avg_label = f"{avg_score:g}"
+        avg_sub = "середній бал"
+    else:
+        avg_label = "—"
+        avg_sub = "середній бал"
     render_stat_cards(
         [
             ("📞", "primary", str(total), "Всього дзвінків", date_label),
-            ("★", "green", avg_label, "Середній %", "по бальній рубриці"),
+            ("★", "green", avg_label, "Середній бал", avg_sub),
             ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
         ]
     )
@@ -435,8 +478,14 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
 
     st.markdown("### Архів")
     day_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else check_iso
-    avg = summary.get("avg_percent")
-    avg_txt = f"{avg}% середній" if avg is not None else "—"
+    avg = summary.get("avg_score")
+    max_score = summary.get("max_score")
+    if avg is not None and max_score is not None:
+        avg_txt = f"середній бал {avg:g}/{float(max_score):g}"
+    elif avg is not None:
+        avg_txt = f"середній бал {avg:g}"
+    else:
+        avg_txt = "—"
     type_note = call_type
     st.markdown(
         f"""
