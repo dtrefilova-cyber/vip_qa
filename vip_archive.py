@@ -337,12 +337,6 @@ def _archive_keys(slug: str) -> tuple[str, str]:
     return f"vip_archive_page_{slug}", f"vip_archive_day_{slug}"
 
 
-def _pct_of(part: int, total: int) -> str:
-    if not total:
-        return "0.0%"
-    return f"{part / total * 100:.1f}%"
-
-
 def render_kpi_row(
     *,
     call_type: str,
@@ -355,19 +349,17 @@ def render_kpi_row(
 
     _ = call_type
     total = int(counts.get("total") or 0)
-    high = int(counts.get("high") or 0)
-    mid = int(counts.get("mid") or 0)
-    low = int(counts.get("low") or 0)
+    avg = counts.get("avg_percent")
     date_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else "—"
-    # Три показники замість GREEN/RED: розподіл за % бала
+    today_label = today_kyiv().strftime("%d.%m.%Y")
+    avg_label = f"{avg}%" if avg is not None else "—"
     render_stat_cards(
         [
-            ("★", "green", str(high), "Високий ≥80%", _pct_of(high, total)),
-            ("●", "amber", str(mid), "Середній 50–79%", _pct_of(mid, total)),
-            ("●", "red", str(low), "Низький <50%", _pct_of(low, total)),
+            ("📞", "primary", str(total), "Всього дзвінків", date_label),
+            ("★", "green", avg_label, "Середній %", "по бальній рубриці"),
+            ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
         ]
     )
-    st.caption(f"Всього за {date_label}: {total} · Опрацьовано сьогодні: {today_count}")
     if counts_error:
         ok, _ = get_supabase_health()
         if ok:
@@ -443,9 +435,6 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
 
     st.markdown("### Архів")
     day_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else check_iso
-    high = int(summary.get("high") or 0)
-    mid = int(summary.get("mid") or 0)
-    low = int(summary.get("low") or 0)
     avg = summary.get("avg_percent")
     avg_txt = f"{avg}% середній" if avg is not None else "—"
     type_note = call_type
@@ -454,7 +443,7 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
         <div class="archive-summary">
           <div>
             <h4>Аналізи за {day_label}</h4>
-            <p>{archive_total} дзвінків · {avg_txt} · ≥80%: {high} · 50–79%: {mid} · &lt;50%: {low} · {type_note}</p>
+            <p>{archive_total} дзвінків · {avg_txt} · {type_note}</p>
           </div>
         </div>
         """,
