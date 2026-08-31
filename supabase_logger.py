@@ -6,7 +6,6 @@ import importlib.metadata
 
 from supabase import create_client
 
-from qa_comments import detect_forbidden_phrases_in_dialogue
 from utils import BUILD_SHA
 
 SUPABASE_UNAVAILABLE_MESSAGE = (
@@ -157,15 +156,35 @@ def log_vip_short_call_to_supabase(
         "is_birthday_call": bool(facts.get("is_birthday_greeting")),
         "deepgram_transcript": deepgram_transcript,
         "gpt_transcript": gpt_transcript,
-        "forbidden_words_found": detect_forbidden_phrases_in_dialogue(gpt_transcript),
-        "rudeness_detected": bool(facts.get("rudeness_detected")),
-        "rudeness_confidence": facts.get("rudeness_confidence", "low"),
-        "verdict": verdict_data.get("verdict"),
+        "forbidden_words_found": [],
+        "rudeness_detected": False,
+        "rudeness_confidence": "low",
+        # New rubric fields (nullable on DB; also mirrored into debug_data)
+        "call_type": verdict_data.get("call_type") or call.get("vip_call_type"),
+        "rubric_version": verdict_data.get("rubric_version"),
+        "criteria_facts": dict(facts or {}),
+        "criteria_scores": verdict_data.get("criteria") or [],
+        "total_score": verdict_data.get("total_score"),
+        "max_score": verdict_data.get("max_score"),
+        "percent": verdict_data.get("percent"),
+        "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
+        "verdict": verdict_data.get("verdict") or "scored",
         "verdict_reasons": verdict_data.get("verdict_reasons", []),
         "review_flags": verdict_data.get("review_flags", []),
         "debug_data": {
             "facts": dict(facts),
             "call": {k: v for k, v in call.items() if k not in ("qa_comment", "important_note")},
+            "score": {
+                "call_type": verdict_data.get("call_type") or call.get("vip_call_type"),
+                "total_score": verdict_data.get("total_score"),
+                "max_score": verdict_data.get("max_score"),
+                "percent": verdict_data.get("percent"),
+                "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
+                "critical_reasons": verdict_data.get("critical_reasons") or [],
+                "criteria": verdict_data.get("criteria") or [],
+                "rubric_version": verdict_data.get("rubric_version"),
+                "score_label": verdict_data.get("score_label"),
+            },
             "build_sha": BUILD_SHA,
         },
     }
@@ -174,6 +193,29 @@ def log_vip_short_call_to_supabase(
         client.table("vip_short_call_logs").insert(row).execute()
         return True
     except Exception as e:
+        # Fallback without new columns if migration not applied yet
+        msg = str(e)
+        if "column" in msg.lower() or "schema" in msg.lower() or "pgrst" in msg.lower():
+            legacy = {
+                k: v
+                for k, v in row.items()
+                if k
+                not in {
+                    "call_type",
+                    "rubric_version",
+                    "criteria_facts",
+                    "criteria_scores",
+                    "total_score",
+                    "max_score",
+                    "percent",
+                    "is_critical_fail",
+                }
+            }
+            try:
+                client.table("vip_short_call_logs").insert(legacy).execute()
+                return True
+            except Exception as e2:
+                e = e2
         import streamlit as st
 
         key_source = st.session_state.get("supabase_last_key_source", "unknown")

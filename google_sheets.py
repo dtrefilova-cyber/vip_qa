@@ -247,10 +247,29 @@ VIP_RESULT_CELL_COLORS = {
 
 
 def format_vip_short_comment_for_sheet(verdict_data):
+    """Legacy alias — supports old GREEN/RED and new score payloads."""
+    return format_vip_score_comment_for_sheet(verdict_data)
+
+
+def format_vip_score_comment_for_sheet(verdict_data):
     parts = []
+    if verdict_data.get("score_label"):
+        parts.append(f"Бал: {verdict_data.get('score_label')}")
+    if verdict_data.get("is_critical_fail"):
+        crit = "; ".join(verdict_data.get("critical_reasons") or []) or "критична помилка"
+        parts.append(f"КРИТИЧНА ПОМИЛКА: {crit}")
+    for item in verdict_data.get("criteria") or []:
+        key = item.get("label") or item.get("key") or "criterion"
+        pts = item.get("points")
+        mx = item.get("max_points")
+        line = f"— {key}: {pts:g}/{mx:g}"
+        reasons = [str(r).strip() for r in (item.get("reasons") or []) if str(r).strip()]
+        if reasons:
+            line += f" ({'; '.join(reasons)})"
+        parts.append(line)
     for reason in verdict_data.get("verdict_reasons") or []:
         text = str(reason or "").strip()
-        if text:
+        if text and text not in "\n".join(parts):
             parts.append(f"— {text}")
     for flag in verdict_data.get("review_flags") or []:
         text = str(flag or "").strip()
@@ -263,25 +282,36 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
     worksheet = google_client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
     next_row = find_next_row(worksheet, start_row=2, key_column=4)
 
+    # A-E meta | F score label | G comment | H+ extended score fields (nullable for legacy)
     values = [
         row_data.get("project", ""),
         row_data.get("tl", ""),
         row_data.get("manager", ""),
         row_data.get("client_id", ""),
         row_data.get("call_date", ""),
-        "",
+        row_data.get("result", ""),
         row_data.get("comment", ""),
+        row_data.get("call_type", ""),
+        row_data.get("total_score", ""),
+        row_data.get("max_score", ""),
+        row_data.get("percent", ""),
+        "так" if row_data.get("is_critical_fail") else "ні",
+        row_data.get("critical_reasons", ""),
+        row_data.get("criteria_scores", ""),
     ]
     try:
-        sheets_retry(worksheet.update, f"A{next_row}:G{next_row}", [values])
+        sheets_retry(worksheet.update, f"A{next_row}:N{next_row}", [values])
     except Exception as e:
         return str(e)
 
-    verdict = str(row_data.get("result", "")).upper()
-    color = VIP_RESULT_CELL_COLORS.get(verdict)
-    if color:
+    # Soft tint for critical fails only (no GREEN/RED verdict coloring for new rubric)
+    if row_data.get("is_critical_fail"):
         try:
-            sheets_retry(worksheet.format, f"F{next_row}", {"backgroundColor": color})
+            sheets_retry(
+                worksheet.format,
+                f"F{next_row}",
+                {"backgroundColor": VIP_RESULT_CELL_COLORS["RED"]},
+            )
         except Exception as e:
             return f"Рядок записано, колір комірки не застосовано: {e}"
     return True

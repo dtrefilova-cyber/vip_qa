@@ -27,6 +27,26 @@ def _flatten_row(row: dict) -> dict:
     out["tl_name"] = call.get("tl") or out.get("tl_name") or ""
     out["qa_manager"] = call.get("qa_manager") or out.get("qa_manager") or ""
     out["verdict"] = str(out.get("verdict") or "").lower()
+    score = debug.get("score") if isinstance(debug, dict) else {}
+    if not isinstance(score, dict):
+        score = {}
+    out["percent"] = out.get("percent") if out.get("percent") is not None else score.get("percent")
+    out["total_score"] = (
+        out.get("total_score") if out.get("total_score") is not None else score.get("total_score")
+    )
+    out["max_score"] = (
+        out.get("max_score") if out.get("max_score") is not None else score.get("max_score")
+    )
+    out["rubric_call_type"] = (
+        out.get("call_type")
+        or score.get("call_type")
+        or call.get("vip_call_type")
+        or ""
+    )
+    if out.get("is_critical_fail") is None:
+        out["is_critical_fail"] = bool(score.get("is_critical_fail"))
+    else:
+        out["is_critical_fail"] = bool(out.get("is_critical_fail"))
     return out
 
 
@@ -64,6 +84,7 @@ def load_vip_logs() -> pd.DataFrame:
     df["period_date"] = df["call_date"]
     df["is_green"] = df["verdict"].eq("green")
     df["is_red"] = df["verdict"].eq("red")
+    df["percent"] = pd.to_numeric(df.get("percent"), errors="coerce")
     return df
 
 

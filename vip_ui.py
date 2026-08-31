@@ -16,9 +16,9 @@ from utils import transcribe_audio_cached
 CALL_PAGE_META = {
     "Короткий": {
         "active": "short",
-        "title": "Короткі дзвінки",
-        "heading": "Короткі дзвінки",
-        "caption": "Завантаження та аналіз коротких дзвінків VIP",
+        "title": "VIP дзвінки",
+        "heading": "VIP дзвінки",
+        "caption": "Короткий 90 сек (макс. 30) та VIP Friendly (макс. 57,5) — бальна оцінка",
     },
 }
 

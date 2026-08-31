@@ -1,92 +1,38 @@
-"""AI-екстракція фактів для VIP-короткого дзвінка."""
+"""AI-екстракція фактів для VIP Короткий 90 сек і VIP Friendly."""
+
+from __future__ import annotations
 
 import json
 import re
 
 import streamlit as st
 
-from prompts_vip_short import get_vip_short_analysis_prompt
+from core.vip_friendly_scoring import VipFriendlyFactsBundle
+from core.vip_short_scoring import VipShort90sFactsBundle
+from prompts_vip_friendly import get_vip_friendly_analysis_prompt
+from prompts_vip_short import get_vip_short_90s_analysis_prompt
 
-EVIDENCE_KEYS = (
-    "is_structured_call",
-    "answering_machine_detected",
-    "client_audio_missing_suspected",
-    "is_birthday_greeting",
-    "rudeness_detected",
-    "objection_ignored",
-    "inaccurate_info_suspected",
-    "could_not_help_suspected",
-    "missing_humanity_suspected",
-    "manager_fabricated_client_reason",
-    "comment_mismatch_detected",
-)
-
-DEFAULT_VIP_FACTS = {
-    "is_structured_call": False,
-    "answering_machine_detected": False,
-    "client_audio_missing_suspected": False,
-    "is_birthday_greeting": False,
-    "rudeness_detected": False,
-    "rudeness_confidence": "low",
-    "objection_ignored": False,
-    "inaccurate_info_suspected": False,
-    "could_not_help_suspected": False,
-    "missing_humanity_suspected": False,
-    "manager_fabricated_client_reason": False,
-    "comment_mismatch_detected": False,
-    "evidence": {key: None for key in EVIDENCE_KEYS},
-}
+VIP_SHORT_FACTS_CACHE_TAG = "vip_short90s_r1_20260831"
+VIP_FRIENDLY_FACTS_CACHE_TAG = "vip_friendly_r1_20260831"
 
 
-def _normalize_evidence_item(value):
-    if not isinstance(value, dict):
-        return None
-    timing = str(value.get("timing") or "").strip()
-    quote = str(value.get("quote") or "").strip()
-    if not timing and not quote:
-        return None
-    return {
-        "timing": timing,
-        "quote": quote,
-    }
-
-
-def normalize_vip_evidence(raw_evidence) -> dict:
-    evidence = {key: None for key in EVIDENCE_KEYS}
-    if not isinstance(raw_evidence, dict):
-        return evidence
-    for key in EVIDENCE_KEYS:
-        evidence[key] = _normalize_evidence_item(raw_evidence.get(key))
-    return evidence
-
-
-def apply_vip_defaults(facts: dict) -> dict:
-    result = dict(DEFAULT_VIP_FACTS)
-    incoming = dict(facts or {})
-    evidence = normalize_vip_evidence(incoming.pop("evidence", None))
-    result.update(incoming)
-    result["evidence"] = evidence
-    return result
-
-
-def parse_vip_analysis_response(text):
+def _extract_json_object(text: str) -> dict | None:
     match = re.search(r"\{[\s\S]*\}", text or "")
     if not match:
         return None
-    payload = json.loads(match.group())
-    return apply_vip_defaults(payload.get("facts", {}))
+    try:
+        return json.loads(match.group())
+    except Exception:
+        return None
 
 
-def extract_vip_short_facts(client, model, dialogue, qa_comment, important_note, max_output_tokens):
-    prompt = get_vip_short_analysis_prompt(qa_comment, important_note)
+def _call_gpt_json(client, model, prompt: str, dialogue: str, max_output_tokens: int) -> dict:
     full_prompt = f"{prompt}\n\nСИРИЙ ТРАНСКРИПТ:\n{dialogue}"
-
     tokens_budget = max_output_tokens
     last_error = None
-
-    for _attempt in range(2):
-        if _attempt > 0:
-            st.warning(f"Retry attempt {_attempt}: невалідний JSON від моделі. Помилка: {last_error}")
+    for attempt in range(2):
+        if attempt > 0:
+            st.warning(f"Retry attempt {attempt}: невалідний JSON від моделі. Помилка: {last_error}")
         try:
             res = client.chat.completions.create(
                 model=model,
@@ -98,13 +44,61 @@ def extract_vip_short_facts(client, model, dialogue, qa_comment, important_note,
                     {"role": "user", "content": full_prompt},
                 ],
             )
-            parsed = parse_vip_analysis_response(res.choices[0].message.content)
-            if parsed:
-                return parsed
+            payload = _extract_json_object(res.choices[0].message.content)
+            if payload is not None:
+                # allow either root facts or nested {"facts": {...}}
+                if isinstance(payload.get("facts"), dict):
+                    return dict(payload["facts"])
+                return dict(payload)
             last_error = "empty or invalid JSON"
-        except Exception as e:
-            last_error = str(e)
+        except Exception as exc:
+            last_error = str(exc)
         tokens_budget = int(tokens_budget * 1.6)
+    st.error(f"GPT error (VIP facts): {last_error}")
+    return {}
 
-    st.error(f"GPT error (VIP short): {last_error}")
-    return apply_vip_defaults({})
+
+def extract_vip_short_90s_facts(
+    client,
+    model,
+    dialogue,
+    qa_comment,
+    important_note,
+    max_output_tokens,
+) -> dict:
+    prompt = get_vip_short_90s_analysis_prompt(qa_comment, important_note)
+    raw = _call_gpt_json(client, model, prompt, dialogue, max_output_tokens)
+    return VipShort90sFactsBundle.model_validate(raw or {}).model_dump()
+
+
+def extract_vip_friendly_facts(
+    client,
+    model,
+    dialogue,
+    qa_comment,
+    important_note,
+    max_output_tokens,
+    *,
+    client_is_military: bool | None = None,
+    betking_x2_applicable: bool | None = None,
+) -> dict:
+    prompt = get_vip_friendly_analysis_prompt(
+        qa_comment,
+        important_note,
+        client_is_military=client_is_military,
+        betking_x2_applicable=betking_x2_applicable,
+    )
+    raw = _call_gpt_json(client, model, prompt, dialogue, max_output_tokens)
+    return VipFriendlyFactsBundle.model_validate(raw or {}).model_dump()
+
+
+# --- legacy aliases used by older imports ---
+def apply_vip_defaults(facts: dict) -> dict:
+    """Normalize short-90s facts dict (replaces old red/green defaults)."""
+    return VipShort90sFactsBundle.model_validate(facts or {}).model_dump()
+
+
+def extract_vip_short_facts(client, model, dialogue, qa_comment, important_note, max_output_tokens):
+    return extract_vip_short_90s_facts(
+        client, model, dialogue, qa_comment, important_note, max_output_tokens
+    )

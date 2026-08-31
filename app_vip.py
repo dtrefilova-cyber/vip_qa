@@ -1,4 +1,4 @@
-"""VIP — головна сторінка з картками коротких дзвінків (аналог app_retention.py)."""
+"""VIP — головна сторінка з картками (Короткий 90 сек / VIP Friendly)."""
 
 from __future__ import annotations
 
@@ -6,15 +6,18 @@ import json as _json
 
 import streamlit as st
 
-from constants import VIP_SHORT_SHEET_ID
+from constants import CALL_TYPE_FRIENDLY, CALL_TYPE_SHORT_90S, VIP_SHORT_SHEET_ID
+from core.vip_friendly_scoring import score_vip_friendly_call
 from core.vip_short_scoring import score_vip_short_call
 from google_sheets import (
     append_vip_short_result,
     connect_google,
-    format_vip_short_comment_for_sheet,
+    format_vip_score_comment_for_sheet,
 )
 from supabase_logger import log_vip_short_call_to_supabase
 from upload_cards import (
+    CALL_TYPE,
+    GRID_COLUMNS,
     _keys,
     _slug,
     card_rows,
@@ -44,27 +47,34 @@ from utils import (
     transcribe_call_audio,
 )
 from vip_archive import render_archive_section, render_call_type_stats
-from vip_short_ai_assistant import apply_vip_defaults, extract_vip_short_facts
+from vip_short_ai_assistant import (
+    VIP_FRIENDLY_FACTS_CACHE_TAG,
+    VIP_SHORT_FACTS_CACHE_TAG,
+    extract_vip_friendly_facts,
+    extract_vip_short_90s_facts,
+)
 
 
-def _vip_facts_cache_key(dialogue, qa_comment, important_note, cache_version):
+def _facts_cache_key(tag, dialogue, qa_comment, important_note, cache_version, extra=""):
     payload = "|".join(
-        ["vip_short_r5_1607", cache_version, qa_comment or "", important_note or "", dialogue or ""]
+        [tag, cache_version, qa_comment or "", important_note or "", extra or "", dialogue or ""]
     )
     return _transcript_cache_key(payload, cache_version, "", "", False)
 
 
 @st.cache_data(ttl=172800, show_spinner=False)
-def analyze_vip_call_cached(url, call_date, dialogue, qa_comment, important_note, cache_version):
-    cache_key = _vip_facts_cache_key(dialogue, qa_comment, important_note, cache_version)
+def analyze_vip_short_90s_cached(url, call_date, dialogue, qa_comment, important_note, cache_version):
+    _ = (url, call_date)
+    cache_key = _facts_cache_key(
+        VIP_SHORT_FACTS_CACHE_TAG, dialogue, qa_comment, important_note, cache_version
+    )
     persisted = _load_persisted_cleaned_transcript(cache_key)
     if persisted is not None:
         try:
-            return apply_vip_defaults(_json.loads(persisted))
+            return _json.loads(persisted)
         except Exception:
             pass
-
-    facts = extract_vip_short_facts(
+    facts = extract_vip_short_90s_facts(
         client,
         OPENAI_ANALYSIS_MODEL,
         dialogue,
@@ -79,22 +89,76 @@ def analyze_vip_call_cached(url, call_date, dialogue, qa_comment, important_note
     return facts
 
 
-def render_verdict_badge(verdict_data):
-    verdict = verdict_data.get("verdict")
-    if verdict == "red":
-        st.error("🔴 RED")
-    elif verdict == "green":
-        st.success("🟢 GREEN")
-    for reason in verdict_data.get("verdict_reasons", []):
-        st.write(f"— {reason}")
-    for flag in verdict_data.get("review_flags", []):
-        st.warning(f"🟡 На перевірку ТЛ: {flag}")
+@st.cache_data(ttl=172800, show_spinner=False)
+def analyze_vip_friendly_cached(
+    url,
+    call_date,
+    dialogue,
+    qa_comment,
+    important_note,
+    cache_version,
+    client_is_military,
+    betking_x2_applicable,
+):
+    _ = (url, call_date)
+    extra = f"mil={client_is_military}|bk={betking_x2_applicable}"
+    cache_key = _facts_cache_key(
+        VIP_FRIENDLY_FACTS_CACHE_TAG,
+        dialogue,
+        qa_comment,
+        important_note,
+        cache_version,
+        extra,
+    )
+    persisted = _load_persisted_cleaned_transcript(cache_key)
+    if persisted is not None:
+        try:
+            return _json.loads(persisted)
+        except Exception:
+            pass
+    facts = extract_vip_friendly_facts(
+        client,
+        OPENAI_ANALYSIS_MODEL,
+        dialogue,
+        qa_comment,
+        important_note,
+        OPENAI_MAX_OUTPUT_TOKENS,
+        client_is_military=client_is_military,
+        betking_x2_applicable=betking_x2_applicable,
+    )
+    try:
+        _save_persisted_cleaned_transcript(cache_key, _json.dumps(facts, ensure_ascii=False))
+    except Exception:
+        pass
+    return facts
+
+
+def render_score_badge(verdict_data: dict) -> None:
+    label = verdict_data.get("score_label") or "—"
+    if verdict_data.get("is_critical_fail"):
+        reasons = "; ".join(verdict_data.get("critical_reasons") or []) or "критична помилка"
+        st.error(f"Критична помилка: {reasons}. Бал {label}")
+    else:
+        st.success(f"Бал: {label}")
+
+    for item in verdict_data.get("criteria") or []:
+        label = item.get("label") or item.get("key") or "criterion"
+        pts = item.get("points")
+        mx = item.get("max_points")
+        st.write(f"**{label}:** {pts:g} / {mx:g}")
+        for reason in item.get("reasons") or []:
+            st.caption(f"— {reason}")
+
     if verdict_data.get("supabase_error"):
         st.error(f"Supabase insert error: {verdict_data['supabase_error']}")
     if verdict_data.get("sheet_error"):
         st.error(f"Google Sheets write error: {verdict_data['sheet_error']}")
     if verdict_data.get("analysis_error"):
         st.error(verdict_data["analysis_error"])
+
+
+# legacy name
+render_verdict_badge = render_score_badge
 
 
 def _write_result_to_sheet(call, verdict_data):
@@ -106,8 +170,15 @@ def _write_result_to_sheet(call, verdict_data):
             "manager": call.get("ret_manager", ""),
             "client_id": call.get("client_id", ""),
             "call_date": call.get("call_date", ""),
-            "result": "GREEN" if verdict_data.get("verdict") == "green" else "RED",
-            "comment": format_vip_short_comment_for_sheet(verdict_data),
+            "call_type": call.get("vip_call_type", ""),
+            "total_score": verdict_data.get("total_score"),
+            "max_score": verdict_data.get("max_score"),
+            "percent": verdict_data.get("percent"),
+            "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
+            "critical_reasons": "; ".join(verdict_data.get("critical_reasons") or []),
+            "criteria_scores": _json.dumps(verdict_data.get("criteria") or [], ensure_ascii=False),
+            "result": verdict_data.get("score_label") or "scored",
+            "comment": format_vip_score_comment_for_sheet(verdict_data),
         }
         res = append_vip_short_result(gclient, VIP_SHORT_SHEET_ID, row_data)
         if res is not True:
@@ -147,15 +218,30 @@ def _analyze_single_call(i, call, results_state):
                 project_name="",
             )
 
-            facts = analyze_vip_call_cached(
-                call.get("url", ""),
-                call.get("call_date", ""),
-                timed_for_gpt,
-                call.get("qa_comment", ""),
-                call.get("important_note", ""),
-                ANALYSIS_CACHE_VERSION,
-            )
-            verdict_data = score_vip_short_call(facts, call, transcript)
+            selected = str(call.get("vip_call_type") or CALL_TYPE_SHORT_90S)
+            if selected == CALL_TYPE_FRIENDLY:
+                facts = analyze_vip_friendly_cached(
+                    call.get("url", ""),
+                    call.get("call_date", ""),
+                    timed_for_gpt,
+                    call.get("qa_comment", ""),
+                    call.get("important_note", ""),
+                    ANALYSIS_CACHE_VERSION,
+                    bool(call.get("client_is_military")),
+                    bool(call.get("betking_x2_applicable")),
+                )
+                verdict_data = score_vip_friendly_call(facts, call, transcript)
+            else:
+                facts = analyze_vip_short_90s_cached(
+                    call.get("url", ""),
+                    call.get("call_date", ""),
+                    timed_for_gpt,
+                    call.get("qa_comment", ""),
+                    call.get("important_note", ""),
+                    ANALYSIS_CACHE_VERSION,
+                )
+                verdict_data = score_vip_short_call(facts, call, transcript)
+
             supabase_error = ""
             sheet_error = ""
 
@@ -200,7 +286,7 @@ def _render_vip_results(call_type: str, card_id: int) -> None:
         st.error(result["analysis_error"])
         return
     verdict_data = result.get("verdict_data") or {}
-    render_verdict_badge(verdict_data)
+    render_score_badge(verdict_data)
 
 
 def _process_pending(
@@ -257,7 +343,7 @@ def _render_call_type_tab(
         action = render_upload_toolbar(call_type, cards, projects_list)
         with st.container(key=keys["body"]):
             for row in card_rows(list(cards)):
-                cols = st.columns(3)
+                cols = st.columns(GRID_COLUMNS)
                 for col, card in zip(cols, row):
                     with col:
                         render_vip_card(

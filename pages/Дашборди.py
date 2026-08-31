@@ -14,14 +14,15 @@ from dashboard_theme import (
 from ui_theme import render_page_header
 
 setup_page("Дашборди", active="dashboards")
-render_page_header("Дашборди", "VIP verdict-аналітика (red/green) за менеджерами та періодом")
+render_page_header("Дашборди", "VIP бальна аналітика (Короткий 90 сек / Friendly) + історичні scored/green/red")
 
 df_all = load_vip_logs()
 df, _, _, _ = render_analytics_filters(df_all)
 
 total = len(df)
-green = int(df["is_green"].sum()) if not df.empty and "is_green" in df.columns else 0
-red = int(df["is_red"].sum()) if not df.empty and "is_red" in df.columns else 0
+scored = df[df["percent"].notna()] if not df.empty and "percent" in df.columns else df.iloc[0:0]
+avg_pct = float(scored["percent"].mean()) if len(scored) else None
+critical = int(df["is_critical_fail"].sum()) if not df.empty and "is_critical_fail" in df.columns else 0
 projects = (
     {
         str(p).strip()
@@ -40,13 +41,11 @@ mgrs = (
     if not df.empty
     else set()
 )
-green_pct = f"{green / total * 100:.0f}%" if total else "—"
 render_kpi_row(
     [
         ("Всього аналізів", f"{total:,}".replace(",", " ")),
-        ("GREEN", str(green)),
-        ("RED", str(red)),
-        ("GREEN %", green_pct),
+        ("Середній %", f"{avg_pct:.1f}%" if avg_pct is not None else "—"),
+        ("Критичні", str(critical)),
         ("Менеджерів", str(len(mgrs))),
         ("Проєктів", str(len(projects))),
     ]
@@ -70,58 +69,70 @@ with col1:
 
     def _render_verdict_pie():
         work = df.copy()
-        work["verdict"] = _label_series(work["verdict"]).str.upper()
-        counts = work.groupby("verdict").size().reset_index(name="кількість")
-        fig = px.pie(counts, names="verdict", values="кількість")
-        style_figure(fig, showlegend=True)
-        render_plotly(fig, height=340, key="dash_verdict")
+        if "rubric_call_type" in work.columns and work["rubric_call_type"].astype(str).str.len().gt(0).any():
+            work["rubric_call_type"] = _label_series(work["rubric_call_type"])
+            counts = work.groupby("rubric_call_type").size().reset_index(name="кількість")
+            fig = px.pie(counts, names="rubric_call_type", values="кількість")
+            style_figure(fig, showlegend=True)
+            render_plotly(fig, height=340, key="dash_type")
+        else:
+            work["verdict"] = _label_series(work["verdict"]).str.upper()
+            counts = work.groupby("verdict").size().reset_index(name="кількість")
+            fig = px.pie(counts, names="verdict", values="кількість")
+            style_figure(fig, showlegend=True)
+            render_plotly(fig, height=340, key="dash_verdict")
 
-    chart_card("RED / GREEN", _render_verdict_pie)
+    chart_card("Розподіл по типах / статусах", _render_verdict_pie)
 
 with col2:
 
     def _render_mgr_chart():
         work = df.copy()
         work["ret_manager"] = _label_series(work["ret_manager"])
-        work = work[work["ret_manager"] != "—"]
+        work = work[(work["ret_manager"] != "—") & work["percent"].notna()]
+        if work.empty:
+            st.caption("Немає бальних записів для менеджерів.")
+            return
         grouped = (
             work.groupby("ret_manager")
-            .agg(green=("is_green", "sum"), red=("is_red", "sum"), total=("verdict", "size"))
+            .agg(avg_percent=("percent", "mean"), total=("percent", "size"))
             .reset_index()
-            .sort_values("total", ascending=False)
+            .sort_values("avg_percent", ascending=False)
             .head(20)
         )
         fig = px.bar(
             grouped,
             x="ret_manager",
-            y=["green", "red"],
-            barmode="stack",
-            color_discrete_sequence=[colors[2], colors[4] if len(colors) > 4 else colors[0]],
+            y="avg_percent",
+            color_discrete_sequence=[colors[2]],
         )
-        style_figure(fig, showlegend=True, xaxis_title="", yaxis_title="")
+        style_figure(fig, showlegend=False, xaxis_title="", yaxis_title="Середній %")
         render_plotly(fig, height=340, key="dash_mgr")
 
-    chart_card("Вердикти по менеджерах", _render_mgr_chart)
+    chart_card("Середній % по менеджерах", _render_mgr_chart)
 
 
 def _render_proj_chart():
     work = df.copy()
     work["project"] = _label_series(work["project"])
-    work = work[work["project"] != "—"]
+    work = work[(work["project"] != "—") & work["percent"].notna()]
+    if work.empty:
+        st.caption("Немає бальних записів для проєктів.")
+        return
     grouped = (
         work.groupby("project")
-        .agg(green=("is_green", "sum"), red=("is_red", "sum"))
+        .agg(avg_percent=("percent", "mean"), total=("percent", "size"))
         .reset_index()
+        .sort_values("avg_percent", ascending=False)
     )
     fig = px.bar(
         grouped,
         x="project",
-        y=["green", "red"],
-        barmode="stack",
-        color_discrete_sequence=[colors[2], colors[0]],
+        y="avg_percent",
+        color_discrete_sequence=[colors[0]],
     )
-    style_figure(fig, showlegend=True, xaxis_title="", yaxis_title="")
+    style_figure(fig, showlegend=False, xaxis_title="", yaxis_title="Середній %")
     render_plotly(fig, height=340, key="dash_proj")
 
 
-chart_card("Вердикти по проєктах", _render_proj_chart)
+chart_card("Середній % по проєктах", _render_proj_chart)

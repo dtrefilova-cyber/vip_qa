@@ -1,177 +1,185 @@
-"""Детермінований вердикт VIP-короткого дзвінка: red / green / review.
+"""VIP «Короткий 90 сек» — бальна рубрика (макс. 30), без red/green."""
 
-GPT дає тільки факти (vip_short_ai_assistant.extract_vip_short_facts).
-Статус бонусу і ручні прапорці QA приходять у call dict.
-Вся логіка вердикту — тут, кодом, без винятків.
-"""
+from __future__ import annotations
 
-from qa_comments import detect_forbidden_phrases_in_dialogue
+from pydantic import BaseModel, Field
 
+from core.vip_scoring_common import (
+    ClosingFacts,
+    ContactFacts,
+    CriterionScore,
+    PrepFacts,
+    ScoringResult,
+    SharedCallContext,
+    SharedContextFacts,
+    score_closing,
+    score_contact,
+    score_prep,
+)
 
-def _evidence_suffix(evidence) -> str:
-    if not isinstance(evidence, dict):
-        return ""
-    timing = str(evidence.get("timing") or "").strip()
-    quote = str(evidence.get("quote") or "").strip()
-    bits = []
-    if timing:
-        bits.append(timing)
-    if quote:
-        bits.append(f"«{quote}»")
-    if not bits:
-        return ""
-    return f" ({' | '.join(bits)})"
-
-
-def _with_evidence(text: str, evidence) -> str:
-    return f"{text}{_evidence_suffix(evidence)}"
+RUBRIC_VERSION = "v2_90sec"
+CALL_TYPE_KEY = "vip_short_90s"
+MAX_SCORE = 30.0
 
 
-def _fact_evidence(facts: dict, key: str):
-    evidence = facts.get("evidence") or {}
-    if not isinstance(evidence, dict):
-        return None
-    return evidence.get(key)
+class SlipHandlingFacts(BaseModel):
+    client_attempted_to_end_call: bool = False
+    reason_stated_by_client: bool = False
+    reason_clarified_by_manager: bool = False
+    manager_reacted_appropriately: bool = False
+    proposed_callback: bool = False
+    specified_concrete_time: bool = False
+    confirmed_agreement_or_clear_refusal: bool = False
+    client_flatly_refused_any_callback: bool = False
 
 
-def score_vip_short_call(facts: dict, call: dict, dialogue: str) -> dict:
-    """
-    call — ручні поля кволіті:
-      previous_call_not_service, days_since_last_service_30plus,
-      has_tl_permission, qa_comment, bonus_issue, needs_callback, callback_happened.
-    Повертає {"verdict": "red"|"green", "verdict_reasons": [...], "review_flags": [...]}
-    """
-    reasons = []
-    review_flags = []
+class SlipCriticalFacts(BaseModel):
+    continued_pitch_after_client_said_cannot_talk: bool = False
+    continued_pitch_instead_of_agreeing_callback: bool = False
+    asked_irrelevant_questions: bool = False
+    artificially_extended_call: bool = False
+    delayed_ending_after_callback_agreed: bool = False
+    ended_without_using_available_retention_options: bool = False
 
-    forbidden_found = detect_forbidden_phrases_in_dialogue(dialogue)
 
-    previous_call_not_service = bool(call.get("previous_call_not_service"))
-    days_30plus = bool(call.get("days_since_last_service_30plus"))
-    has_tl_permission = bool(call.get("has_tl_permission"))
-    qa_comment = str(call.get("qa_comment") or "").strip()
-    bonus_issue = bool(call.get("bonus_issue"))
-    needs_callback = bool(call.get("needs_callback"))
-    callback_happened = call.get("callback_happened")
+class VipShort90sFactsBundle(BaseModel):
+    contact: ContactFacts = Field(default_factory=ContactFacts)
+    slip_handling: SlipHandlingFacts = Field(default_factory=SlipHandlingFacts)
+    slip_critical: SlipCriticalFacts = Field(default_factory=SlipCriticalFacts)
+    prep: PrepFacts = Field(default_factory=PrepFacts)
+    closing: ClosingFacts = Field(default_factory=ClosingFacts)
+    shared_context: SharedContextFacts = Field(default_factory=SharedContextFacts)
 
-    if facts.get("is_birthday_greeting"):
-        return {
-            "verdict": "green",
-            "verdict_reasons": [
-                _with_evidence(
-                    "Привітання з Днем народження",
-                    _fact_evidence(facts, "is_birthday_greeting"),
-                )
+
+def score_slip_handling(f: SlipHandlingFacts, ctx: SharedCallContext) -> CriterionScore:
+    if not f.client_attempted_to_end_call:
+        return CriterionScore(
+            "slip_handling",
+            10.0,
+            10.0,
+            ["Клієнт не намагався завершити дзвінок достроково — критерій не застосовний"],
+        )
+    if ctx.client_ended_call_first or f.client_flatly_refused_any_callback:
+        return CriterionScore(
+            "slip_handling",
+            10.0,
+            10.0,
+            [
+                "Клієнт завершив дзвінок сам / категорично відмовився від передзвону — не знижується"
             ],
-            "review_flags": [],
-        }
-
-    if facts.get("answering_machine_detected"):
-        return {
-            "verdict": "red",
-            "verdict_reasons": [
-                _with_evidence(
-                    "На лінії не було живого клієнта (автовідповідач/утримання/обрив зв'язку) — "
-                    "реальної розмови не відбулось",
-                    _fact_evidence(facts, "answering_machine_detected"),
-                )
-            ],
-            "review_flags": [],
-        }
-
-    # Дозвіл ТЛ — єдина підстава для звільнення від вимоги структури,
-    # і лише якщо не минуло 30+ днів з останньої сервісної розмови.
-    structure_exempt = has_tl_permission and not days_30plus
-    if not facts.get("is_structured_call") and not structure_exempt:
-        reasons.append(
-            _with_evidence(
-                "Дзвінок без структури і без дозволу ТЛ",
-                _fact_evidence(facts, "is_structured_call"),
-            )
         )
 
-    if previous_call_not_service:
-        reasons.append("Попередній дзвінок не був сервісним")
-
-    if days_30plus:
-        reasons.append("30+ днів з останньої сервісної розмови — дзвінок мав бути сервісним")
-
-    if bonus_issue:
-        reasons.append("Проблема з нарахуванням бонусу")
-
-    if needs_callback and not callback_happened:
-        reasons.append("Потрібен був повторний дзвінок, але його не було")
-
-    if forbidden_found:
-        reasons.append(f"Заборонені слова: {', '.join(forbidden_found)}")
-
-    if not qa_comment:
-        reasons.append("Відсутній коментар по дзвінку")
-
-    if facts.get("rudeness_detected") and facts.get("rudeness_confidence") in ("medium", "high"):
-        reasons.append(
-            _with_evidence(
-                "Виявлено грубість/хамство",
-                _fact_evidence(facts, "rudeness_detected"),
-            )
+    reason_ok = f.reason_stated_by_client or f.reason_clarified_by_manager
+    actions = [
+        reason_ok,
+        f.manager_reacted_appropriately,
+        f.proposed_callback,
+        f.specified_concrete_time,
+        f.confirmed_agreement_or_clear_refusal,
+        not ctx.call_format_prevented_full_flow,
+    ]
+    missing = actions.count(False)
+    if missing == 0:
+        return CriterionScore("slip_handling", 10.0, 10.0, [])
+    if missing == 1:
+        return CriterionScore(
+            "slip_handling",
+            7.5,
+            10.0,
+            ["Не вистачило однієї дії з утримання контакту"],
         )
+    if missing == 2:
+        return CriterionScore(
+            "slip_handling",
+            5.0,
+            10.0,
+            ["Відреагував на бажання завершити розмову, але не до кінця"],
+        )
+    if missing <= 4:
+        return CriterionScore(
+            "slip_handling",
+            2.5,
+            10.0,
+            ["Фактично не працював зі «сливом» клієнта"],
+        )
+    return CriterionScore(
+        "slip_handling",
+        0.0,
+        10.0,
+        ["Не зробив жодної дії з утримання контакту"],
+    )
 
-    if facts.get("manager_fabricated_client_reason"):
-        reasons.append(
-            _with_evidence(
-                "Менеджер \"зливає\" розмову: фабрикує відповідь/стан/причину за клієнта "
-                "замість реальної відповіді, і на цьому згортає розмову",
-                _fact_evidence(facts, "manager_fabricated_client_reason"),
-            )
-        )
 
-    if facts.get("comment_mismatch_detected"):
-        reasons.append(
-            _with_evidence(
-                "Коментар не відповідає змісту дзвінка",
-                _fact_evidence(facts, "comment_mismatch_detected"),
-            )
-        )
-
-    # --- Критерії з Гайду, раніше були лише review, тепер RED напряму ---
-    # (objection_ignored, inaccurate_info_suspected, could_not_help_suspected,
-    # missing_humanity_suspected прямо названі критичними в Гайд_коротких_ВІП —
-    # переведено з review_flags у reasons)
-    if facts.get("objection_ignored"):
-        reasons.append(
-            _with_evidence(
-                "Ігнор заперечення або мінімальне опрацювання",
-                _fact_evidence(facts, "objection_ignored"),
-            )
-        )
-    if facts.get("inaccurate_info_suspected"):
-        reasons.append(
-            _with_evidence(
-                "Надання недостовірної інформації",
-                _fact_evidence(facts, "inaccurate_info_suspected"),
-            )
-        )
-    if facts.get("could_not_help_suspected"):
-        reasons.append(
-            _with_evidence(
-                "Не допоміг клієнту у питанні, яке міг вирішити",
-                _fact_evidence(facts, "could_not_help_suspected"),
-            )
-        )
-    if facts.get("missing_humanity_suspected"):
-        reasons.append(
-            _with_evidence(
-                "Відсутня невимушеність і базова людяність, коли вона була необхідна",
-                _fact_evidence(facts, "missing_humanity_suspected"),
-            )
-        )
-
-    verdict = "red" if reasons else "green"
-    if verdict == "green" and not review_flags:
-        reasons = ["Дзвінок без зауважень."]
-
-    return {
-        "verdict": verdict,
-        "verdict_reasons": reasons,
-        "review_flags": review_flags,
+def has_critical_slip_violation(f: SlipCriticalFacts) -> tuple[bool, list[str]]:
+    flags = {
+        "Продовжив презентацію, хоча клієнт прямо сказав, що не може говорити": (
+            f.continued_pitch_after_client_said_cannot_talk
+        ),
+        "Продовжив продаж замість домовленості про інший контакт": (
+            f.continued_pitch_instead_of_agreeing_callback
+        ),
+        "Ставив питання, що не допомагають зберегти контакт": f.asked_irrelevant_questions,
+        "Штучно затягував дзвінок": f.artificially_extended_call,
+        "Затягував завершення після згоди клієнта на передзвін": (
+            f.delayed_ending_after_callback_agreed
+        ),
+        "Завершив дзвінок, не використавши доречні можливості утримання контакту": (
+            f.ended_without_using_available_retention_options
+        ),
     }
+    reasons = [label for label, val in flags.items() if val]
+    return (len(reasons) > 0, reasons)
+
+
+def score_vip_short_90s(
+    facts: VipShort90sFactsBundle,
+    ctx: SharedCallContext | None = None,
+) -> ScoringResult:
+    ctx = ctx or SharedCallContext.from_facts(facts.shared_context.model_dump())
+    contact = score_contact(facts.contact)
+    slip = score_slip_handling(facts.slip_handling, ctx)
+    prep = score_prep(facts.prep)
+    closing = score_closing(facts.closing, ctx)
+
+    is_critical, critical_reasons = has_critical_slip_violation(facts.slip_critical)
+    criteria = [contact, slip, prep, closing]
+    total = 0.0 if is_critical else sum(c.points for c in criteria)
+    max_score = sum(c.max_points for c in criteria)
+
+    return ScoringResult(
+        call_type=CALL_TYPE_KEY,
+        total_score=total,
+        max_score=max_score,
+        percent=round(total / max_score * 100, 1) if max_score else 0.0,
+        is_critical_fail=is_critical,
+        critical_reasons=critical_reasons,
+        criteria=criteria,
+        rubric_version=RUBRIC_VERSION,
+    )
+
+
+def score_vip_short_call(facts: dict, call: dict | None = None, dialogue: str = "") -> dict:
+    """Сумісний вхід для app_vip: dict фактів → dict результату для UI/логів."""
+    _ = (call, dialogue)
+    bundle = VipShort90sFactsBundle.model_validate(facts or {})
+    ctx = SharedCallContext.from_facts(bundle.shared_context.model_dump())
+    return score_vip_short_90s(bundle, ctx).to_dict()
+
+
+def build_perfect_short90s_facts() -> VipShort90sFactsBundle:
+    return VipShort90sFactsBundle(
+        contact=ContactFacts(
+            greeted=True,
+            used_client_name=True,
+            named_project=True,
+            availability_check_relevant=False,
+        ),
+        slip_handling=SlipHandlingFacts(client_attempted_to_end_call=False),
+        slip_critical=SlipCriticalFacts(),
+        prep=PrepFacts(objections_present=False, objections=[]),
+        closing=ClosingFacts(
+            asked_if_more_questions=True,
+            said_goodbye=True,
+            thanked_and_left_contact_open=True,
+        ),
+    )

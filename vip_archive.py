@@ -54,18 +54,50 @@ def _call_meta(row: dict) -> dict:
 def fetch_vip_summary(check_date_iso: str, today_iso: str) -> tuple[dict, int, str | None]:
     client, err = get_supabase_client()
     if client is None:
-        return {"total": 0, "green": 0, "red": 0}, 0, err
+        return {"total": 0, "avg_percent": None, "critical": 0}, 0, err
     try:
         day_res = (
             client.table("vip_short_call_logs")
-            .select("verdict")
+            .select("*")
             .eq("call_date", check_date_iso)
             .execute()
         )
         rows = day_res.data or []
         total = len(rows)
-        green = sum(1 for r in rows if str(r.get("verdict") or "").lower() == "green")
-        red = sum(1 for r in rows if str(r.get("verdict") or "").lower() == "red")
+        percents = []
+        critical = 0
+        for row in rows:
+            pct = row.get("percent")
+            is_crit = row.get("is_critical_fail")
+            debug = row.get("debug_data") or {}
+            if isinstance(debug, str):
+                try:
+                    import json
+
+                    debug = json.loads(debug)
+                except Exception:
+                    debug = {}
+            score = (debug or {}).get("score") if isinstance(debug, dict) else {}
+            if isinstance(score, dict):
+                if is_crit is None:
+                    is_crit = score.get("is_critical_fail")
+                if pct is None:
+                    pct = score.get("percent")
+            if is_crit:
+                critical += 1
+            if pct is not None:
+                try:
+                    percents.append(float(pct))
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            # legacy green/red → approximate percent for mixed days
+            verdict = str(row.get("verdict") or "").lower()
+            if verdict == "green":
+                percents.append(100.0)
+            elif verdict == "red":
+                percents.append(0.0)
+        avg_percent = round(sum(percents) / len(percents), 1) if percents else None
         today_res = (
             client.table("vip_short_call_logs")
             .select("id")
@@ -73,9 +105,15 @@ def fetch_vip_summary(check_date_iso: str, today_iso: str) -> tuple[dict, int, s
             .execute()
         )
         today_count = len(today_res.data or [])
-        return {"total": total, "green": green, "red": red}, today_count, None
+        return {
+            "total": total,
+            "avg_percent": avg_percent,
+            "critical": critical,
+            "green": sum(1 for r in rows if str(r.get("verdict") or "").lower() == "green"),
+            "red": sum(1 for r in rows if str(r.get("verdict") or "").lower() == "red"),
+        }, today_count, None
     except Exception as exc:
-        return {"total": 0, "green": 0, "red": 0}, 0, str(exc)
+        return {"total": 0, "avg_percent": None, "critical": 0}, 0, str(exc)
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -131,27 +169,70 @@ def format_archive_time(value) -> str:
 
 def row_to_archive_card(row: dict, index: int) -> dict:
     meta = _call_meta(row)
-    verdict = str(row.get("verdict") or "").lower()
-    tone = "ok" if verdict == "green" else ("bad" if verdict == "red" else "wait")
-    reasons = row.get("verdict_reasons") or []
-    reason_text = reasons[0] if reasons else ""
+    debug = row.get("debug_data") or {}
+    if isinstance(debug, str):
+        try:
+            import json
+
+            debug = json.loads(debug)
+        except Exception:
+            debug = {}
+    score = (debug or {}).get("score") if isinstance(debug, dict) else {}
+    if not isinstance(score, dict):
+        score = {}
+
+    total_score = row.get("total_score") if row.get("total_score") is not None else score.get("total_score")
+    max_score = row.get("max_score") if row.get("max_score") is not None else score.get("max_score")
+    percent = row.get("percent") if row.get("percent") is not None else score.get("percent")
+    is_critical = bool(
+        row.get("is_critical_fail")
+        if row.get("is_critical_fail") is not None
+        else score.get("is_critical_fail")
+    )
+    call_type_label = (
+        row.get("call_type")
+        or score.get("call_type")
+        or meta.get("vip_call_type")
+        or "VIP"
+    )
+
+    if percent is not None:
+        try:
+            pct_f = float(percent)
+            tone = "ok" if pct_f >= 80 else ("mid" if pct_f >= 50 else "bad")
+            if is_critical:
+                tone = "bad"
+            badge = f"{float(total_score):g}/{float(max_score):g} ({pct_f:g}%)"
+            display_score = pct_f
+        except (TypeError, ValueError):
+            tone, badge, display_score = "wait", "—", None
+    else:
+        verdict = str(row.get("verdict") or "").lower()
+        tone = "ok" if verdict == "green" else ("bad" if verdict == "red" else "wait")
+        badge = "GREEN" if verdict == "green" else ("RED" if verdict == "red" else "—")
+        display_score = 100 if verdict == "green" else (0 if verdict == "red" else None)
+
     ctx_rows = []
-    if reason_text:
-        ctx_rows.append({"icon": "📌", "label": "Вердикт", "value": str(reason_text), "ok": verdict == "green"})
+    if is_critical:
+        crit = "; ".join(score.get("critical_reasons") or row.get("verdict_reasons") or [])
+        ctx_rows.append({"icon": "⛔", "label": "Критична помилка", "value": crit or "так", "ok": False})
+    elif badge and badge not in {"GREEN", "RED", "—"}:
+        ctx_rows.append({"icon": "📌", "label": "Бал", "value": badge, "ok": tone == "ok"})
+
     return {
         "id": row.get("id"),
-        "call_type": "Короткий",
+        "call_type": call_type_label,
         "title": f"Дзвінок #{int(index + 1):04d}",
         "status": "АНАЛІЗОВАНО",
         "tone": tone,
         "analyzed": True,
-        "score": 100 if verdict == "green" else (0 if verdict == "red" else None),
+        "score": display_score,
         "time": format_archive_time(row.get("call_date")),
         "client": row.get("client_id") or "—",
         "project": meta.get("project") or "—",
         "manager": meta.get("ret_manager") or "—",
         "audio_url": row.get("call_url") or "",
-        "result_badge": "GREEN" if verdict == "green" else ("RED" if verdict == "red" else "—"),
+        "result_badge": badge,
         "ctx_rows": ctx_rows,
         "url": row.get("call_url") or "",
         "call_date": row.get("call_date"),
@@ -173,18 +254,19 @@ def render_kpi_row(
     from ui_theme import render_stat_cards
 
     total = int(counts.get("total") or 0)
-    green = int(counts.get("green") or 0)
-    red = int(counts.get("red") or 0)
+    avg = counts.get("avg_percent")
+    critical = int(counts.get("critical") or 0)
     date_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else "—"
     today_label = today_kyiv().strftime("%d.%m.%Y")
+    avg_label = f"{avg}%" if avg is not None else "—"
 
     render_stat_cards(
         [
             ("📞", "primary", str(total), "Всього дзвінків", date_label),
-            ("🟢", "green", str(green), "GREEN", _pct(green, total)),
-            ("🔴", "rose", str(red), "RED", _pct(red, total)),
+            ("★", "primary", avg_label, "Середній %", "по нових бальних"),
+            ("⛔", "rose", str(critical), "Критичні", "Короткий 90 сек"),
             ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
-            ("🎧", "primary", call_type, "Тип дзвінка", "VIP Short"),
+            ("🎧", "primary", "VIP", "Тип", call_type),
         ]
     )
     if counts_error:
@@ -256,14 +338,15 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
 
     st.markdown("### Архів")
     day_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else check_iso
-    green = int(summary.get("green") or 0)
-    red = int(summary.get("red") or 0)
+    avg = summary.get("avg_percent")
+    critical = int(summary.get("critical") or 0)
+    avg_txt = f"{avg}% середній" if avg is not None else "немає % для бальних"
     st.markdown(
         f"""
         <div class="archive-summary">
           <div>
             <h4>Аналізи за {day_label}</h4>
-            <p>{archive_total} дзвінків · {green} GREEN · {red} RED</p>
+            <p>{archive_total} дзвінків · {avg_txt} · {critical} критичних</p>
           </div>
         </div>
         """,
