@@ -276,8 +276,72 @@ def format_vip_score_comment_for_sheet(verdict_data):
     return "\n".join(parts) if parts else "— Дзвінок без зауважень."
 
 
+FRIENDLY_RESULTS_SHEET_NAME = "RESULTS FRIENDLY"
+
+
+def format_result_cell(total_score: float, max_score: float, percent: float) -> str:
+    """Формат колонки RESULT для RESULTS FRIENDLY: «46/60 (80%)»."""
+
+    def fmt_num(n: float) -> str:
+        return f"{float(n):g}"
+
+    return f"{fmt_num(total_score)}/{fmt_num(max_score)} ({fmt_num(percent)}%)"
+
+
+def format_comment_cell(criteria) -> str:
+    """Розбивка критеріїв для колонки «Коментар» (RESULTS FRIENDLY)."""
+    from core.vip_scoring_common import CRITERION_LABELS, CriterionScore
+
+    lines = []
+    for c in criteria or []:
+        if isinstance(c, CriterionScore):
+            key = c.key
+            pts = c.points
+            mx = c.max_points
+            reasons = list(c.reasons or [])
+            label = CRITERION_LABELS.get(key, key)
+        elif isinstance(c, dict):
+            key = c.get("key") or "criterion"
+            pts = c.get("points")
+            mx = c.get("max_points")
+            reasons = [str(r).strip() for r in (c.get("reasons") or []) if str(r).strip()]
+            label = c.get("label") or CRITERION_LABELS.get(key, key)
+        else:
+            continue
+        try:
+            line = f"{label}: {float(pts):g}/{float(mx):g}"
+        except (TypeError, ValueError):
+            line = f"{label}: {pts}/{mx}"
+        if reasons:
+            line += " — " + "; ".join(reasons)
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _append_results_row(google_client, spreadsheet_id, worksheet_name, values):
+    """Спільний запис рядка A–G у RESULTS / RESULTS FRIENDLY."""
+    worksheet = google_client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+    next_row = find_next_row(worksheet, start_row=2, key_column=4)
+    try:
+        sheets_retry(worksheet.update, f"A{next_row}:G{next_row}", [values])
+    except Exception as e:
+        return str(e)
+    try:
+        sheets_retry(
+            worksheet.format,
+            f"F{next_row}",
+            {
+                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
+                "horizontalAlignment": "CENTER",
+            },
+        )
+    except Exception:
+        pass
+    return True
+
+
 def format_vip_result_cell(row_data) -> str:
-    """Значення для колонки RESULT — бали, без GREEN/RED заливки."""
+    """Значення для колонки RESULT (короткі) — бали без заливки GREEN/RED."""
     total = row_data.get("total_score")
     max_score = row_data.get("max_score")
     if total is None and row_data.get("result"):
@@ -293,35 +357,43 @@ def format_vip_result_cell(row_data) -> str:
 
 
 def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_name="RESULTS"):
-    worksheet = google_client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
-    next_row = find_next_row(worksheet, start_row=2, key_column=4)
-
-    # A–G як у чинному аркуші RESULTS: F = бали (не заливка GREEN/RED)
     result_cell = format_vip_result_cell(row_data)
     values = [
         row_data.get("project", ""),
         row_data.get("tl", ""),
         row_data.get("manager", ""),
-        row_data.get("client_id", ""),
+        str(row_data.get("client_id", "")),
         row_data.get("call_date", ""),
         result_cell,
         row_data.get("comment", ""),
     ]
-    try:
-        sheets_retry(worksheet.update, f"A{next_row}:G{next_row}", [values])
-    except Exception as e:
-        return str(e)
+    return _append_results_row(google_client, spreadsheet_id, worksheet_name, values)
 
-    # Скидаємо заливку RESULT — у комірці мають бути бали текстом/числом
+
+def append_vip_friendly_result(
+    google_client,
+    spreadsheet_id,
+    row_data,
+    worksheet_name=FRIENDLY_RESULTS_SHEET_NAME,
+):
+    """Дописує рядок у RESULTS FRIENDLY: PROJECT|TL|MANAGER|ID|DATE|RESULT|Коментар."""
+    total = row_data.get("total_score")
+    max_score = row_data.get("max_score")
+    percent = row_data.get("percent")
     try:
-        sheets_retry(
-            worksheet.format,
-            f"F{next_row}",
-            {
-                "backgroundColor": {"red": 1, "green": 1, "blue": 1},
-                "horizontalAlignment": "CENTER",
-            },
-        )
-    except Exception:
-        pass
-    return True
+        result_cell = format_result_cell(float(total), float(max_score), float(percent))
+    except (TypeError, ValueError):
+        result_cell = format_vip_result_cell(row_data)
+    comment = row_data.get("comment")
+    if not comment:
+        comment = format_comment_cell(row_data.get("criteria") or [])
+    values = [
+        row_data.get("project", ""),
+        row_data.get("tl", ""),
+        row_data.get("manager", ""),
+        str(row_data.get("client_id", "")),
+        row_data.get("call_date", ""),
+        result_cell,
+        comment,
+    ]
+    return _append_results_row(google_client, spreadsheet_id, worksheet_name, values)
