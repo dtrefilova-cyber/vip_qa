@@ -100,7 +100,7 @@ def score_slip_handling(f: SlipHandlingFacts, ctx: SharedCallContext) -> Criteri
             "slip_handling",
             2.5,
             10.0,
-            ["Фактично не працював зі «сливом» клієнта"],
+            ["Фактично не працював зі «зливом» клієнта"],
         )
     return CriterionScore(
         "slip_handling",

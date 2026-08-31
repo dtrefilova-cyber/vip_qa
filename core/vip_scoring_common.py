@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 CRITERION_LABELS = {
     "contact": "Встановлення контакту",
-    "slip_handling": "Робота зі «сливом» / утримання контакту",
+    "slip_handling": "Робота зі «зливом» / утримання контакту",
     "prep": "Робота з запереченням (P.R.E.P.)",
     "closing": "Завершення",
     "friendly_development": "Розвиток френдлі",
