@@ -6,6 +6,14 @@ from datetime import date, datetime
 
 import streamlit as st
 
+from constants import (
+    CALL_TYPE_FRIENDLY,
+    CALL_TYPE_KEY_FRIENDLY,
+    CALL_TYPE_KEY_SHORT,
+    CALL_TYPE_SHORT_90S,
+    resolve_call_type_key,
+)
+from core.vip_scoring_common import CRITERION_LABELS
 from supabase_logger import SUPABASE_UNAVAILABLE_MESSAGE, get_supabase_client, get_supabase_health
 
 ARCHIVE_PAGE_SIZE = 3
@@ -37,7 +45,7 @@ def iso_check_date(value) -> str | None:
     return None
 
 
-def _call_meta(row: dict) -> dict:
+def _parse_debug(row: dict) -> dict:
     debug = row.get("debug_data") or {}
     if isinstance(debug, str):
         try:
@@ -46,93 +54,168 @@ def _call_meta(row: dict) -> dict:
             debug = json.loads(debug)
         except Exception:
             debug = {}
+    return debug if isinstance(debug, dict) else {}
+
+
+def _call_meta(row: dict) -> dict:
+    debug = _parse_debug(row)
     call = debug.get("call") if isinstance(debug, dict) else {}
     return call if isinstance(call, dict) else {}
 
 
+def _row_type_key(row: dict) -> str | None:
+    meta = _call_meta(row)
+    debug = _parse_debug(row)
+    score = debug.get("score") if isinstance(debug, dict) else {}
+    if not isinstance(score, dict):
+        score = {}
+    raw = (
+        row.get("call_type")
+        or score.get("call_type")
+        or meta.get("vip_call_type")
+        or ""
+    )
+    key = resolve_call_type_key(str(raw))
+    if key:
+        return key
+    # Legacy GREEN/RED rows → short
+    verdict = str(row.get("verdict") or "").lower()
+    if verdict in {"green", "red"}:
+        return CALL_TYPE_KEY_SHORT
+    return None
+
+
+def _filter_rows(rows: list[dict], type_key: str | None) -> list[dict]:
+    if not type_key:
+        return list(rows)
+    wanted = resolve_call_type_key(type_key) or type_key
+    out = []
+    for row in rows:
+        rk = _row_type_key(row)
+        if wanted == CALL_TYPE_KEY_SHORT:
+            # short page: new short + legacy without type
+            if rk in {None, CALL_TYPE_KEY_SHORT}:
+                out.append(row)
+        elif rk == wanted:
+            out.append(row)
+    return out
+
+
+def _score_blob(row: dict) -> dict:
+    debug = _parse_debug(row)
+    score = debug.get("score") if isinstance(debug, dict) else {}
+    return score if isinstance(score, dict) else {}
+
+
+def _worst_criterion(score: dict, row: dict) -> str | None:
+    criteria = score.get("criteria") or row.get("criteria_scores") or []
+    if isinstance(criteria, str):
+        try:
+            import json
+
+            criteria = json.loads(criteria)
+        except Exception:
+            criteria = []
+    if not isinstance(criteria, list) or not criteria:
+        return None
+    worst = None
+    worst_ratio = 2.0
+    for item in criteria:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pts = float(item.get("points") or 0)
+            mx = float(item.get("max_points") or 0)
+        except (TypeError, ValueError):
+            continue
+        if mx <= 0:
+            continue
+        ratio = pts / mx
+        if ratio < worst_ratio:
+            worst_ratio = ratio
+            label = item.get("label") or CRITERION_LABELS.get(item.get("key"), item.get("key"))
+            reasons = [str(r).strip() for r in (item.get("reasons") or []) if str(r).strip()]
+            reason = reasons[0] if reasons else ""
+            worst = f"{label}" + (f" — {reason}" if reason else f" ({pts:g}/{mx:g})")
+    return worst
+
+
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_vip_summary(check_date_iso: str, today_iso: str) -> tuple[dict, int, str | None]:
+def fetch_vip_day_rows(check_date_iso: str) -> tuple[list[dict], str | None]:
     client, err = get_supabase_client()
     if client is None:
-        return {"total": 0, "avg_percent": None, "critical": 0}, 0, err
+        return [], err
     try:
         day_res = (
             client.table("vip_short_call_logs")
             .select("*")
             .eq("call_date", check_date_iso)
-            .execute()
-        )
-        rows = day_res.data or []
-        total = len(rows)
-        percents = []
-        critical = 0
-        for row in rows:
-            pct = row.get("percent")
-            is_crit = row.get("is_critical_fail")
-            debug = row.get("debug_data") or {}
-            if isinstance(debug, str):
-                try:
-                    import json
-
-                    debug = json.loads(debug)
-                except Exception:
-                    debug = {}
-            score = (debug or {}).get("score") if isinstance(debug, dict) else {}
-            if isinstance(score, dict):
-                if is_crit is None:
-                    is_crit = score.get("is_critical_fail")
-                if pct is None:
-                    pct = score.get("percent")
-            if is_crit:
-                critical += 1
-            if pct is not None:
-                try:
-                    percents.append(float(pct))
-                    continue
-                except (TypeError, ValueError):
-                    pass
-            # legacy green/red → approximate percent for mixed days
-            verdict = str(row.get("verdict") or "").lower()
-            if verdict == "green":
-                percents.append(100.0)
-            elif verdict == "red":
-                percents.append(0.0)
-        avg_percent = round(sum(percents) / len(percents), 1) if percents else None
-        today_res = (
-            client.table("vip_short_call_logs")
-            .select("id")
-            .eq("call_date", today_iso)
-            .execute()
-        )
-        today_count = len(today_res.data or [])
-        return {
-            "total": total,
-            "avg_percent": avg_percent,
-            "critical": critical,
-            "green": sum(1 for r in rows if str(r.get("verdict") or "").lower() == "green"),
-            "red": sum(1 for r in rows if str(r.get("verdict") or "").lower() == "red"),
-        }, today_count, None
-    except Exception as exc:
-        return {"total": 0, "avg_percent": None, "critical": 0}, 0, str(exc)
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_vip_page(check_date_iso: str, offset: int, limit: int) -> tuple[list[dict], str | None]:
-    client, err = get_supabase_client()
-    if client is None:
-        return [], err
-    try:
-        res = (
-            client.table("vip_short_call_logs")
-            .select("*")
-            .eq("call_date", check_date_iso)
             .order("id", desc=True)
-            .range(offset, offset + limit - 1)
             .execute()
         )
-        return list(res.data or []), None
+        return list(day_res.data or []), None
     except Exception as exc:
         return [], str(exc)
+
+
+def fetch_vip_summary(
+    check_date_iso: str,
+    today_iso: str,
+    *,
+    type_key: str | None = None,
+) -> tuple[dict, int, str | None]:
+    rows, err = fetch_vip_day_rows(check_date_iso)
+    if err and not rows:
+        return {"total": 0, "avg_percent": None, "critical": 0}, 0, err
+    rows = _filter_rows(rows, type_key)
+    total = len(rows)
+    percents = []
+    critical = 0
+    for row in rows:
+        pct = row.get("percent")
+        is_crit = row.get("is_critical_fail")
+        score = _score_blob(row)
+        if is_crit is None:
+            is_crit = score.get("is_critical_fail")
+        if pct is None:
+            pct = score.get("percent")
+        if is_crit:
+            critical += 1
+        if pct is not None:
+            try:
+                percents.append(float(pct))
+                continue
+            except (TypeError, ValueError):
+                pass
+        verdict = str(row.get("verdict") or "").lower()
+        if verdict == "green":
+            percents.append(100.0)
+        elif verdict == "red":
+            percents.append(0.0)
+    avg_percent = round(sum(percents) / len(percents), 1) if percents else None
+
+    today_rows, today_err = fetch_vip_day_rows(today_iso)
+    today_rows = _filter_rows(today_rows, type_key)
+    today_count = len(today_rows)
+    return {
+        "total": total,
+        "avg_percent": avg_percent,
+        "critical": critical,
+    }, today_count, err or today_err
+
+
+def fetch_vip_page(
+    check_date_iso: str,
+    offset: int,
+    limit: int,
+    *,
+    type_key: str | None = None,
+) -> tuple[list[dict], str | None]:
+    rows, err = fetch_vip_day_rows(check_date_iso)
+    if err and not rows:
+        return [], err
+    rows = _filter_rows(rows, type_key)
+    return rows[offset : offset + limit], err
 
 
 def archive_page_count(total: int, page_size: int = ARCHIVE_PAGE_SIZE) -> int:
@@ -143,12 +226,6 @@ def archive_page_count(total: int, page_size: int = ARCHIVE_PAGE_SIZE) -> int:
 
 def clamp_archive_page(page: int, n_pages: int) -> int:
     return max(1, min(int(page or 1), n_pages))
-
-
-def _pct(part: int, total: int) -> str:
-    if not total:
-        return "0.0%"
-    return f"{part / total * 100:.1f}%"
 
 
 def format_archive_time(value) -> str:
@@ -169,17 +246,7 @@ def format_archive_time(value) -> str:
 
 def row_to_archive_card(row: dict, index: int) -> dict:
     meta = _call_meta(row)
-    debug = row.get("debug_data") or {}
-    if isinstance(debug, str):
-        try:
-            import json
-
-            debug = json.loads(debug)
-        except Exception:
-            debug = {}
-    score = (debug or {}).get("score") if isinstance(debug, dict) else {}
-    if not isinstance(score, dict):
-        score = {}
+    score = _score_blob(row)
 
     total_score = row.get("total_score") if row.get("total_score") is not None else score.get("total_score")
     max_score = row.get("max_score") if row.get("max_score") is not None else score.get("max_score")
@@ -189,11 +256,13 @@ def row_to_archive_card(row: dict, index: int) -> dict:
         if row.get("is_critical_fail") is not None
         else score.get("is_critical_fail")
     )
+    type_key = _row_type_key(row)
     call_type_label = (
-        row.get("call_type")
-        or score.get("call_type")
-        or meta.get("vip_call_type")
-        or "VIP"
+        CALL_TYPE_FRIENDLY
+        if type_key == CALL_TYPE_KEY_FRIENDLY
+        else CALL_TYPE_SHORT_90S
+        if type_key == CALL_TYPE_KEY_SHORT
+        else (row.get("call_type") or score.get("call_type") or meta.get("vip_call_type") or "VIP")
     )
 
     if percent is not None:
@@ -216,8 +285,12 @@ def row_to_archive_card(row: dict, index: int) -> dict:
     if is_critical:
         crit = "; ".join(score.get("critical_reasons") or row.get("verdict_reasons") or [])
         ctx_rows.append({"icon": "⛔", "label": "Критична помилка", "value": crit or "так", "ok": False})
-    elif badge and badge not in {"GREEN", "RED", "—"}:
-        ctx_rows.append({"icon": "📌", "label": "Бал", "value": badge, "ok": tone == "ok"})
+    else:
+        worst = _worst_criterion(score, row)
+        if worst:
+            ctx_rows.append({"icon": "📌", "label": "Найслабший критерій", "value": worst, "ok": False})
+        elif badge and badge not in {"GREEN", "RED", "—"}:
+            ctx_rows.append({"icon": "📌", "label": "Бал", "value": badge, "ok": tone == "ok"})
 
     return {
         "id": row.get("id"),
@@ -259,16 +332,22 @@ def render_kpi_row(
     date_label = check_date.strftime("%d.%m.%Y") if hasattr(check_date, "strftime") else "—"
     today_label = today_kyiv().strftime("%d.%m.%Y")
     avg_label = f"{avg}%" if avg is not None else "—"
-
-    render_stat_cards(
+    type_key = resolve_call_type_key(call_type)
+    is_friendly = type_key == CALL_TYPE_KEY_FRIENDLY
+    type_short = "Friendly" if is_friendly else "Короткий 90с"
+    cards = [
+        ("📞", "primary", str(total), "Всього дзвінків", date_label),
+        ("★", "primary", avg_label, "Середній %", "по бальній рубриці"),
+    ]
+    if not is_friendly:
+        cards.append(("⛔", "rose", str(critical), "Критичні", "Короткий 90 сек"))
+    cards.extend(
         [
-            ("📞", "primary", str(total), "Всього дзвінків", date_label),
-            ("★", "primary", avg_label, "Середній %", "по нових бальних"),
-            ("⛔", "rose", str(critical), "Критичні", "Короткий 90 сек"),
             ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
-            ("🎧", "primary", "VIP", "Тип", call_type),
+            ("🎧", "primary", type_short, "Тип дзвінка", call_type),
         ]
     )
+    render_stat_cards(cards)
     if counts_error:
         ok, _ = get_supabase_health()
         if ok:
@@ -321,19 +400,25 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
     if not check_iso:
         return
 
+    type_key = resolve_call_type_key(call_type)
     page_key, day_key = _archive_keys(slug)
-    if st.session_state.get(day_key) != check_iso:
+    day_stamp = f"{check_iso}:{type_key or 'all'}"
+    if st.session_state.get(day_key) != day_stamp:
         st.session_state[page_key] = 1
-        st.session_state[day_key] = check_iso
+        st.session_state[day_key] = day_stamp
 
-    summary, _, summary_err = fetch_vip_summary(check_iso, today_kyiv().isoformat())
+    summary, _, summary_err = fetch_vip_summary(
+        check_iso, today_kyiv().isoformat(), type_key=type_key
+    )
     archive_total = int(summary.get("total") or 0)
     n_pages = archive_page_count(archive_total)
     page = clamp_archive_page(st.session_state.get(page_key, 1), n_pages)
     st.session_state[page_key] = page
 
     offset = (page - 1) * ARCHIVE_PAGE_SIZE
-    rows, archive_error = fetch_vip_page(check_iso, offset, ARCHIVE_PAGE_SIZE)
+    rows, archive_error = fetch_vip_page(
+        check_iso, offset, ARCHIVE_PAGE_SIZE, type_key=type_key
+    )
     cards = [row_to_archive_card(row, offset + idx) for idx, row in enumerate(rows)]
 
     st.markdown("### Архів")
@@ -341,18 +426,20 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
     avg = summary.get("avg_percent")
     critical = int(summary.get("critical") or 0)
     avg_txt = f"{avg}% середній" if avg is not None else "немає % для бальних"
+    type_note = call_type
+    crit_part = f" · {critical} критичних" if type_key == CALL_TYPE_KEY_SHORT else ""
     st.markdown(
         f"""
         <div class="archive-summary">
           <div>
             <h4>Аналізи за {day_label}</h4>
-            <p>{archive_total} дзвінків · {avg_txt} · {critical} критичних</p>
+            <p>{archive_total} дзвінків · {avg_txt}{crit_part} · {type_note}</p>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.caption(f"Усі VIP-аналізи за {day_label}. На сторінці — три останні, далі можна гортати.")
+    st.caption(f"Архів «{type_note}» за {day_label}. На сторінці — три останні, далі можна гортати.")
 
     err = archive_error or summary_err
     if err:
@@ -362,7 +449,7 @@ def render_archive_section(*, call_type: str, slug: str, check_date) -> None:
         st.caption(f"Архів vip_short_call_logs: {err}")
 
     if not cards:
-        st.caption(f"За {day_label} ще немає проаналізованих дзвінків.")
+        st.caption(f"За {day_label} ще немає проаналізованих дзвінків цього типу.")
         return
 
     cols = st.columns(3)
@@ -388,7 +475,8 @@ def render_call_type_stats(call_type: str, slug: str, check_date) -> None:
     _ = slug
     check_iso = iso_check_date(check_date) or ""
     today_iso = today_kyiv().isoformat()
-    summary, today_count, err = fetch_vip_summary(check_iso, today_iso)
+    type_key = resolve_call_type_key(call_type)
+    summary, today_count, err = fetch_vip_summary(check_iso, today_iso, type_key=type_key)
     render_kpi_row(
         call_type=call_type,
         check_date=check_date,

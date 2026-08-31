@@ -16,7 +16,6 @@ from google_sheets import (
 )
 from supabase_logger import log_vip_short_call_to_supabase
 from upload_cards import (
-    CALL_TYPE,
     GRID_COLUMNS,
     _keys,
     _slug,
@@ -303,7 +302,7 @@ def _process_pending(
     st.session_state[keys["pending"]] = pending
     results_key = f"results_{call_type}"
     results_state = init_call_results_state(results_key)
-    call = collect_card_call(card_id, managers_config, qa_manager)
+    call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
     results_state.pop(card_id - 1, None)
     ok = _analyze_single_call(card_id - 1, call, results_state)
     if ok:

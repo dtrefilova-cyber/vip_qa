@@ -10,6 +10,12 @@ import streamlit as st
 
 NAV_ITEMS = [
     {"id": "short", "label": "Короткі дзвінки", "icon": "📞", "page": "__home__"},
+    {
+        "id": "friendly",
+        "label": "VIP Friendly (2-й дзвінок)",
+        "icon": "🤝",
+        "page": "pages/VIP_Friendly.py",
+    },
     {"id": "dashboards", "label": "Дашборди", "icon": "📊", "page": "pages/Дашборди.py"},
     {"id": "managers", "label": "Менеджери", "icon": "👥", "page": "pages/Менеджери.py"},
     {"id": "guides", "label": "Гайди", "icon": "📘", "page": "pages/Гайди.py"},

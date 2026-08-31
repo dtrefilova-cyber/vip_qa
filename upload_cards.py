@@ -1,4 +1,4 @@
-"""Сітка карток внесення VIP-дзвінка (Короткий 90 сек / VIP Friendly)."""
+"""Сітка карток внесення VIP-дзвінка (окрема сторінка на кожен call_type)."""
 
 from __future__ import annotations
 
@@ -6,15 +6,18 @@ import html
 
 import streamlit as st
 
-from constants import CALL_TYPE_FRIENDLY, CALL_TYPE_SHORT_90S, CALL_TYPES
+from constants import (
+    CALL_TYPE_FRIENDLY,
+    CALL_TYPE_SHORT_90S,
+    page_slug,
+)
 from ui_theme import clean_select_options, status_pill_html, sync_select_state
 
-GRID_COLUMNS = 2
-CALL_TYPE = CALL_TYPE_SHORT_90S  # default label for shared keys / stats
+GRID_COLUMNS = 3
 
 
 def _slug(call_type: str) -> str:
-    return "short"
+    return page_slug(call_type)
 
 
 def _keys(slug: str) -> dict[str, str]:
@@ -28,10 +31,15 @@ def _keys(slug: str) -> dict[str, str]:
     }
 
 
+def _fk(slug: str, name: str, card_id: int) -> str:
+    return f"{name}_{slug}_{card_id}"
+
+
 def initial_cards() -> list[dict]:
     return [
         {"id": 1, "number": 1, "expanded": True},
         {"id": 2, "number": 2, "expanded": True},
+        {"id": 3, "number": 3, "expanded": True},
     ]
 
 
@@ -39,7 +47,7 @@ def ensure_card_state(call_type: str) -> list[dict]:
     keys = _keys(_slug(call_type))
     if keys["cards"] not in st.session_state:
         st.session_state[keys["cards"]] = initial_cards()
-        st.session_state[keys["next_id"]] = 3
+        st.session_state[keys["next_id"]] = 4
     if keys["errors"] not in st.session_state:
         st.session_state[keys["errors"]] = {}
     if keys["pending"] not in st.session_state:
@@ -77,50 +85,60 @@ def _field_cols(*, tall: bool = False):
     return st.columns([1.12, 1.28], vertical_alignment=align)
 
 
+def _url_key(call_type: str, card_id: int) -> str:
+    return _fk(_slug(call_type), "url", card_id)
+
+
+def _date_key(call_type: str, card_id: int) -> str:
+    return _fk(_slug(call_type), "calldate", card_id)
+
+
 def _has_url(call_type: str, card_id: int) -> bool:
-    return bool(str(st.session_state.get(f"url_short_{card_id}") or "").strip())
-
-
-def _date_key(card_id: int) -> str:
-    return f"calldate_{card_id}_vip"
+    return bool(str(st.session_state.get(_url_key(call_type, card_id)) or "").strip())
 
 
 def required_errors(call_type: str, card_id: int, projects_list: list) -> dict[str, str]:
-    _ = (call_type, projects_list)
+    _ = projects_list
+    slug = _slug(call_type)
     errors = {}
     if not _has_url(call_type, card_id):
         errors["url"] = "Вкажіть посилання на дзвінок"
-    if not str(st.session_state.get(f"vip_call_type_{card_id}") or "").strip():
-        errors["call_type"] = "Оберіть тип дзвінка"
-    if not str(st.session_state.get(f"vip_manager_{card_id}") or "").strip():
+    if not str(st.session_state.get(_fk(slug, "manager", card_id)) or "").strip():
         errors["ret_manager"] = "Оберіть менеджера"
-    if not str(st.session_state.get(f"client_short_{card_id}") or "").strip():
+    if not str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip():
         errors["client_id"] = "Введіть ID клієнта"
-    if not st.session_state.get(_date_key(card_id)):
+    if not st.session_state.get(_date_key(call_type, card_id)):
         errors["call_date"] = "Оберіть дату дзвінка"
     return errors
 
 
-def collect_card_call(card_id: int, managers_config: list, qa_manager: str) -> dict:
+def collect_card_call(
+    card_id: int,
+    managers_config: list,
+    qa_manager: str,
+    *,
+    call_type: str,
+) -> dict:
+    slug = _slug(call_type)
     manager_lookup = {m.get("manager"): m for m in managers_config}
-    ret_manager = str(st.session_state.get(f"vip_manager_{card_id}") or "").strip()
+    ret_manager = str(st.session_state.get(_fk(slug, "manager", card_id)) or "").strip()
     manager_meta = manager_lookup.get(ret_manager, {})
-    call_date_raw = st.session_state.get(_date_key(card_id))
+    call_date_raw = st.session_state.get(_date_key(call_type, card_id))
     call_date = call_date_raw.strftime("%d.%m.%Y") if call_date_raw else ""
-    selected_type = str(st.session_state.get(f"vip_call_type_{card_id}") or CALL_TYPE_SHORT_90S).strip()
     project = str(manager_meta.get("project") or "").strip()
     betking_x2 = project.lower() == "betking"
+    selected_type = CALL_TYPE_FRIENDLY if call_type == CALL_TYPE_FRIENDLY else CALL_TYPE_SHORT_90S
     return {
-        "url": str(st.session_state.get(f"url_short_{card_id}") or "").strip(),
+        "url": str(st.session_state.get(_url_key(call_type, card_id)) or "").strip(),
         "ret_manager": ret_manager,
         "project": project,
         "tl": manager_meta.get("tl", ""),
-        "client_id": str(st.session_state.get(f"client_short_{card_id}") or "").strip(),
+        "client_id": str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip(),
         "call_date": call_date,
-        "qa_comment": str(st.session_state.get(f"vip_comment_{card_id}") or "").strip(),
-        "important_note": str(st.session_state.get(f"vip_important_{card_id}") or "").strip(),
+        "qa_comment": str(st.session_state.get(_fk(slug, "comment", card_id)) or "").strip(),
+        "important_note": str(st.session_state.get(_fk(slug, "important", card_id)) or "").strip(),
         "vip_call_type": selected_type,
-        "client_is_military": bool(st.session_state.get(f"vip_military_{card_id}")),
+        "client_is_military": bool(st.session_state.get(_fk(slug, "military", card_id))),
         "betking_x2_applicable": betking_x2,
         "qa_manager": qa_manager,
     }
@@ -136,10 +154,11 @@ def render_upload_toolbar(call_type: str, cards: list[dict], projects_list: list
         for c in cards
     )
     run_clicked = False
+    type_label = call_type if call_type in {CALL_TYPE_SHORT_90S, CALL_TYPE_FRIENDLY} else "VIP"
 
     st.markdown(
-        '<div style="font-size:14px;font-weight:700;color:var(--text-heading);margin:2px 0 10px">'
-        "Завантажити дзвінки · VIP</div>",
+        f'<div style="font-size:14px;font-weight:700;color:var(--text-heading);margin:2px 0 10px">'
+        f"Завантажити дзвінки · {html.escape(type_label)}</div>",
         unsafe_allow_html=True,
     )
 
@@ -228,6 +247,7 @@ def render_vip_card(
     slug = _slug(call_type)
     errors = dict((st.session_state.get(_keys(slug)["errors"]) or {}).get(card_id) or {})
     manager_names = clean_select_options(m.get("manager") for m in managers_config)
+    is_friendly = call_type == CALL_TYPE_FRIENDLY
 
     with st.container(border=True, key=f"ret_card_{slug}_{card_id}"):
         st.markdown('<div class="upload-call-card-marker"></div>', unsafe_allow_html=True)
@@ -257,25 +277,11 @@ def render_vip_card(
 
         left, right = _field_cols()
         with left:
-            _field_label("🏷", "Тип дзвінка")
-        with right:
-            sync_select_state(f"vip_call_type_{card_id}", CALL_TYPES)
-            st.selectbox(
-                "Тип",
-                CALL_TYPES,
-                index=0,
-                key=f"vip_call_type_{card_id}",
-                disabled=analyzing,
-                label_visibility="collapsed",
-            )
-
-        left, right = _field_cols()
-        with left:
             _field_label("🔗", "Посилання на дзвінок")
         with right:
             st.text_input(
                 "Посилання",
-                key=f"url_short_{card_id}",
+                key=_url_key(call_type, card_id),
                 label_visibility="collapsed",
                 disabled=analyzing,
             )
@@ -284,7 +290,7 @@ def render_vip_card(
         with left:
             _field_label("👤", "Менеджер VIP")
         with right:
-            mk = f"vip_manager_{card_id}"
+            mk = _fk(slug, "manager", card_id)
             sync_select_state(mk, manager_names)
             st.selectbox(
                 "Менеджер",
@@ -302,7 +308,7 @@ def render_vip_card(
         with right:
             st.text_input(
                 "ID",
-                key=f"client_short_{card_id}",
+                key=_fk(slug, "client", card_id),
                 label_visibility="collapsed",
                 disabled=analyzing,
             )
@@ -315,27 +321,31 @@ def render_vip_card(
                 "Дата",
                 value=None,
                 format="DD.MM.YYYY",
-                key=_date_key(card_id),
+                key=_date_key(call_type, card_id),
                 disabled=analyzing,
                 label_visibility="collapsed",
             )
 
-        selected_type = str(st.session_state.get(f"vip_call_type_{card_id}") or CALL_TYPE_SHORT_90S)
-        if selected_type == CALL_TYPE_FRIENDLY:
+        if is_friendly:
             st.checkbox(
                 "Клієнт військовий",
-                key=f"vip_military_{card_id}",
+                key=_fk(slug, "military", card_id),
                 disabled=analyzing,
                 help="Впливає на критерій «Заклик до гри» (не питаємо «чому» після відмови).",
             )
 
         left, right = _field_cols(tall=True)
         with left:
-            _field_label("🚩", "Важливе / попередній контакт", tall=True)
+            label = (
+                "Коментар попереднього контакту / Важливе"
+                if is_friendly
+                else "Важливе / попередній контакт"
+            )
+            _field_label("🚩", label, tall=True)
         with right:
             st.text_area(
                 "Важливе",
-                key=f"vip_important_{card_id}",
+                key=_fk(slug, "important", card_id),
                 height=68,
                 label_visibility="collapsed",
                 disabled=analyzing,
@@ -343,11 +353,11 @@ def render_vip_card(
 
         left, right = _field_cols(tall=True)
         with left:
-            _field_label("💬", "Коментар по дзвінку", tall=True)
+            _field_label("💬", "Коментар по цьому дзвінку", tall=True)
         with right:
             st.text_area(
                 "Коментар",
-                key=f"vip_comment_{card_id}",
+                key=_fk(slug, "comment", card_id),
                 height=68,
                 label_visibility="collapsed",
                 disabled=analyzing,
@@ -380,7 +390,7 @@ def render_vip_card(
 def handle_add_card(call_type: str) -> None:
     slug = _slug(call_type)
     keys = _keys(slug)
-    next_id = int(st.session_state.get(keys["next_id"]) or 3)
+    next_id = int(st.session_state.get(keys["next_id"]) or 4)
     cards = st.session_state[keys["cards"]]
     cards.append({"id": next_id, "number": next_id, "expanded": True})
     st.session_state[keys["next_id"]] = next_id + 1

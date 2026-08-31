@@ -5,53 +5,44 @@ import html
 import streamlit as st
 
 from chrome import setup_page
+from guides_content import GUIDE_VIP_FRIENDLY, GUIDE_VIP_SHORT_90S
 from ui_theme import render_page_header
+
+
+def _render_guide_items(items: list[dict]) -> None:
+    for item in items:
+        title = html.escape(str(item.get("title") or ""))
+        max_pts = html.escape(str(item.get("max_points") or ""))
+        with st.expander(f"{item.get('title')} — макс. {item.get('max_points')}", expanded=False):
+            st.markdown(
+                f"""
+                <div class="guide-block guide-criterion">
+                  <h4>{title} <span class="guide-max">{max_pts}</span></h4>
+                  <div class="guide-body">{html.escape(str(item.get("description") or ""))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if item.get("scale"):
+                st.markdown("**Шкала**")
+                st.markdown(str(item["scale"]))
+            if item.get("notes"):
+                st.markdown("**Примітки / виключення**")
+                st.markdown(str(item["notes"]))
+
 
 setup_page("Гайди", active="guides")
 render_page_header(
     "Гайди",
-    "Бальні рубрики VIP: «Короткий 90 сек» (макс. 30) і «VIP Friendly» (макс. 57,5)",
+    "Повні рубрики з Гайд VIP.xlsx: «Короткий 90 сек» (макс. 30) і «VIP Friendly» (макс. 57,5)",
 )
 
-st.markdown("### Короткий 90 сек (макс. 30)")
-_SHORT = [
-    ("Встановлення контакту", "0 / 2,5 / 5", "Привітання, ім'я клієнта, проєкт; виключення не знижують бал."),
-    ("Робота зі «сливом» / утримання", "0…10", "Реакція на спробу завершити, причина, передзвін, конкретний час, фіксація домовленості."),
-    ("Критичні помилки зі сливом", "обнуляє дзвінок", "Продовження пітчу після «не можу говорити», штучне затягування тощо."),
-    ("P.R.E.P. / заперечення", "0 / 5 / 7,5 / 10", "Найгірше опрацьоване заперечення визначає бал; без заперечень — автомакс."),
-    ("Завершення", "0 / 2,5 / 5", "Питання «чи є ще питання», прощання, відкритий контакт; автозалік якщо клієнт кинув першим."),
-]
+tab_short, tab_friendly = st.tabs(["Короткий 90 сек (макс. 30)", "VIP Friendly (макс. 57,5)"])
 
-for name, scale, body in _SHORT:
-    st.markdown(
-        f"""
-        <div class="guide-block guide-criterion">
-          <h4>{html.escape(name)} <span class="guide-max">{html.escape(scale)}</span></h4>
-          <div class="guide-body">{html.escape(body)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+with tab_short:
+    st.caption("Джерело: аркуш «Короткийдо 100 сек». Вердикт — сума балів; критичні помилки зі сливом обнуляють дзвінок.")
+    _render_guide_items(GUIDE_VIP_SHORT_90S)
 
-st.markdown("### VIP Friendly — 2-й дзвінок (макс. 57,5)")
-_FRIENDLY = [
-    ("Встановлення контакту", "5", "Спільний критерій з «Коротким»."),
-    ("Розвиток френдлі", "7,5", "Особисті питання, follow-up, підтримка теми клієнта, повернення до інфо."),
-    ("Індивідуальний підхід", "7,5", "Використання попереднього контакту, адаптація стилю, позитивний контакт."),
-    ("Заклик до гри", "10", "Депозит сьогодні → завтра → (не для military) відкрите «чому»."),
-    ("Пропозиція бонусів", "5", "Спочатку депозитний бонус, умови, переваги; без знецінення."),
-    ("P.R.E.P.", "10", "Спільний критерій."),
-    ("Завершення", "5", "Спільний критерій."),
-    ("Невимушеність", "7,5", "Рівні high / noticeable_gaps / low / critical — класифікація GPT, бал у коді."),
-]
-
-for name, scale, body in _FRIENDLY:
-    st.markdown(
-        f"""
-        <div class="guide-block guide-criterion">
-          <h4>{html.escape(name)} <span class="guide-max">{html.escape(scale)}</span></h4>
-          <div class="guide-body">{html.escape(body)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+with tab_friendly:
+    st.caption("Джерело: аркуш «VIP FRIENDLY (2-й дзвінок)». Спільні критерії з Коротким — контакт, P.R.E.P., завершення.")
+    _render_guide_items(GUIDE_VIP_FRIENDLY)

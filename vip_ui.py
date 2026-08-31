@@ -1,4 +1,4 @@
-"""Спільна ініціалізація сторінки внесення VIP-дзвінків (аналог retention_ui.py)."""
+"""Спільна ініціалізація сторінки внесення VIP-дзвінків."""
 
 from __future__ import annotations
 
@@ -8,17 +8,23 @@ import streamlit as st
 
 from app_vip import run_call_type_page
 from chrome import setup_page
-from constants import VIP_SHORT_SHEET_ID
+from constants import CALL_TYPE_FRIENDLY, CALL_TYPE_SHORT_90S, VIP_SHORT_SHEET_ID
 from google_sheets import connect_google, load_vip_short_managers
 from presence import start_presence_heartbeat
 from utils import transcribe_audio_cached
 
 CALL_PAGE_META = {
-    "Короткий": {
+    CALL_TYPE_SHORT_90S: {
         "active": "short",
-        "title": "VIP дзвінки",
-        "heading": "VIP дзвінки",
-        "caption": "Короткий 90 сек (макс. 30) та VIP Friendly (макс. 57,5) — бальна оцінка",
+        "title": "Короткі дзвінки",
+        "heading": "Короткі дзвінки",
+        "caption": "Завантаження та аналіз коротких дзвінків VIP (Короткий 90 сек, макс. 30)",
+    },
+    CALL_TYPE_FRIENDLY: {
+        "active": "friendly",
+        "title": "VIP Friendly (2-й дзвінок)",
+        "heading": "VIP Friendly (2-й дзвінок)",
+        "caption": "Завантаження та аналіз дзвінків VIP Friendly (2-й дзвінок клієнту)",
     },
 }
 
@@ -45,6 +51,16 @@ def load_managers_context() -> tuple[list, list[str], dict]:
 
 
 def render_call_entry_page(call_type: str) -> None:
+    """call_type — CALL_TYPE_SHORT_90S або CALL_TYPE_FRIENDLY."""
+    if call_type not in CALL_PAGE_META:
+        # backward-compat aliases
+        if str(call_type).strip() in {"Короткий", "short", "vip_short_90s"}:
+            call_type = CALL_TYPE_SHORT_90S
+        elif str(call_type).strip() in {"friendly", "vip_friendly"}:
+            call_type = CALL_TYPE_FRIENDLY
+        else:
+            raise KeyError(f"Unknown VIP page call_type: {call_type!r}")
+
     meta = CALL_PAGE_META[call_type]
     qa_manager = setup_page(meta["title"], active=meta["active"])
 
