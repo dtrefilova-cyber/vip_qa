@@ -176,7 +176,7 @@ def _write_result_to_sheet(call, verdict_data):
             "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
             "critical_reasons": "; ".join(verdict_data.get("critical_reasons") or []),
             "criteria_scores": _json.dumps(verdict_data.get("criteria") or [], ensure_ascii=False),
-            "result": verdict_data.get("score_label") or "scored",
+            "result": "",  # заповнює format_vip_result_cell з total/max
             "comment": format_vip_score_comment_for_sheet(verdict_data),
         }
         res = append_vip_short_result(gclient, VIP_SHORT_SHEET_ID, row_data)
