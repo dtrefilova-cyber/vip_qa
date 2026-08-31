@@ -32,17 +32,12 @@ def _render_guide_items(items: list[dict]) -> None:
 
 
 setup_page("Гайди", active="guides")
-render_page_header(
-    "Гайди",
-    "Повні рубрики з Гайд VIP.xlsx: «Короткий 90 сек» (макс. 30) і «VIP Friendly» (макс. 60)",
-)
+render_page_header("Гайди")
 
-tab_short, tab_friendly = st.tabs(["Короткий 90 сек (макс. 30)", "VIP Friendly (макс. 60)"])
+tab_short, tab_friendly = st.tabs(["Короткий 90 сек", "VIP Friendly"])
 
 with tab_short:
-    st.caption("Джерело: аркуш «Короткийдо 100 сек». Вердикт — сума балів; критичні помилки зі сливом обнуляють дзвінок.")
     _render_guide_items(GUIDE_VIP_SHORT_90S)
 
 with tab_friendly:
-    st.caption("Джерело: аркуш «VIP FRIENDLY (2-й дзвінок)». Спільні критерії з Коротким — контакт, P.R.E.P., завершення.")
     _render_guide_items(GUIDE_VIP_FRIENDLY)

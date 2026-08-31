@@ -111,7 +111,7 @@ iframe[height="0"][width="0"] {
 }
 
 #aiq-sidebar-toggle {
-  position: fixed; top: 10px; left: 52px; z-index: 2147483646;
+  position: fixed; top: 10px; left: 12px; z-index: 2147483646;
   width: 34px; height: 34px; border-radius: 8px;
   border: 1px solid var(--border-card); background: var(--bg-card);
   color: var(--accent-primary); font-size: 16px; cursor: pointer;
