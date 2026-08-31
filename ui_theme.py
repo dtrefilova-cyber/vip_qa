@@ -130,27 +130,17 @@ def render_page_header(
     *,
     date_label: str | None = None,
 ) -> None:
-    meta = ""
+    """Заголовок сторінки. Плоский HTML — Streamlit інакше може «виплюнути» зайві </div>."""
+    blocks = [f'<h1 class="page-header__title">{html.escape(title)}</h1>']
+    if subtitle:
+        blocks.append(f'<p class="page-header__subtitle">{html.escape(subtitle)}</p>')
     if date_label:
-        meta = (
+        blocks.append(
             f'<div class="page-header__meta">'
             f"<span>📅 {html.escape(str(date_label))}</span></div>"
         )
-    subtitle_html = (
-        f'<p class="page-header__subtitle">{html.escape(subtitle)}</p>' if subtitle else ""
-    )
     st.markdown(
-        f"""
-        <div class="page-header">
-          <div class="page-header__row">
-            <div>
-              <h1 class="page-header__title">{html.escape(title)}</h1>
-              {subtitle_html}
-            </div>
-            {meta}
-          </div>
-        </div>
-        """,
+        f'<div class="page-header">{"".join(blocks)}</div>',
         unsafe_allow_html=True,
     )
 
