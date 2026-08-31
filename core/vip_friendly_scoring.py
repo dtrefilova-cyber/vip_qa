@@ -1,4 +1,4 @@
-"""VIP Friendly (2-й дзвінок) — бальна рубрика (макс. 57.5)."""
+"""VIP Friendly (2-й дзвінок) — бальна рубрика (макс. 60)."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ from core.vip_scoring_common import (
     score_prep,
 )
 
-RUBRIC_VERSION = "v1_friendly"
+RUBRIC_VERSION = "v1_friendly_ease10"
 CALL_TYPE_KEY = "vip_friendly"
-MAX_SCORE = 57.5
+MAX_SCORE = 60.0
 
 
 class FriendlyDevelopmentFacts(BaseModel):
@@ -174,7 +174,7 @@ def score_bonus_offer(f: BonusOfferFacts) -> CriterionScore:
 
 
 _EASE_POINTS = {
-    EaseLevel.HIGH: 7.5,
+    EaseLevel.HIGH: 10.0,
     EaseLevel.NOTICEABLE_GAPS: 5.0,
     EaseLevel.LOW: 2.5,
     EaseLevel.CRITICAL: 0.0,
@@ -182,7 +182,7 @@ _EASE_POINTS = {
 
 
 def score_ease(f: EaseFacts) -> CriterionScore:
-    return CriterionScore("ease", _EASE_POINTS[f.level], 7.5, list(f.signals or []))
+    return CriterionScore("ease", _EASE_POINTS[f.level], 10.0, list(f.signals or []))
 
 
 def score_vip_friendly(

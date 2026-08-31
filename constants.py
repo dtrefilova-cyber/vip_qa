@@ -46,9 +46,9 @@ CALL_TYPE_LABELS = {
 
 CALL_TYPE_MAX_SCORE = {
     CALL_TYPE_KEY_SHORT: 30.0,
-    CALL_TYPE_KEY_FRIENDLY: 57.5,
+    CALL_TYPE_KEY_FRIENDLY: 60.0,
     CALL_TYPE_SHORT_90S: 30.0,
-    CALL_TYPE_FRIENDLY: 57.5,
+    CALL_TYPE_FRIENDLY: 60.0,
 }
 
 # UI slug для session_state / кешу карток (окремо на сторінку)

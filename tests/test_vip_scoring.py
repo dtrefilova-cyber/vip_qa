@@ -111,10 +111,17 @@ def test_friendly_development_full_signals():
     assert score_friendly_development(f).points == 7.5
 
 
-def test_vip_friendly_max_score_is_57_5():
+def test_vip_friendly_max_score_is_60():
     result = score_vip_friendly(build_perfect_friendly_facts(), SharedCallContext())
-    assert result.max_score == 57.5
-    assert result.total_score == 57.5
+    assert result.max_score == 60.0
+    assert result.total_score == 60.0
+
+
+def test_ease_high_is_10():
+    from core.vip_friendly_scoring import EaseFacts, EaseLevel, score_ease
+
+    assert score_ease(EaseFacts(level=EaseLevel.HIGH, signals=[])).points == 10.0
+    assert score_ease(EaseFacts(level=EaseLevel.HIGH, signals=[])).max_points == 10.0
 
 
 def test_vip_short_90s_max_score_is_30():
