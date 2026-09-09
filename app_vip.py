@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json as _json
+import logging
 
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 from constants import CALL_TYPE_FRIENDLY, CALL_TYPE_SHORT_90S, VIP_SHORT_SHEET_ID
 from core.vip_friendly_scoring import score_vip_friendly_call
@@ -149,24 +152,25 @@ def render_score_badge(verdict_data: dict) -> None:
         for reason in item.get("reasons") or []:
             st.caption(f"— {reason}")
 
-    if verdict_data.get("supabase_error"):
-        st.error(f"Supabase insert error: {verdict_data['supabase_error']}")
-    if verdict_data.get("sheet_error"):
-        st.error(f"Google Sheets write error: {verdict_data['sheet_error']}")
-    if verdict_data.get("manual_tracking_error"):
+    # Neutral UX only — never surface raw exception / secret details
+    if verdict_data.get("supabase_write_failed"):
+        st.warning("Результат оцінено, але не залогований у Supabase. Повідомте розробника.")
+    if verdict_data.get("sheet_write_failed"):
+        st.warning("Результат оцінено, але не записаний у RESULTS. Повідомте розробника.")
+    if verdict_data.get("manual_tracking_write_failed"):
         st.warning(
-            "Ручна трекінг-таблиця RESULTS не оновилась (основний аналіз збережено): "
-            f"{verdict_data['manual_tracking_error']}"
+            "Результат оцінено, але не записаний у ручну трекінг-таблицю. Повідомте розробника."
         )
     if verdict_data.get("analysis_error"):
-        st.error(verdict_data["analysis_error"])
+        st.error("Аналіз не завершився. Повідомте розробника.")
 
 
 # legacy name
 render_verdict_badge = render_score_badge
 
 
-def _write_result_to_sheet(call, verdict_data):
+def _write_result_to_sheet(call, verdict_data) -> bool:
+    """Операційний RESULTS. True = ok. Деталі помилок лише в лог."""
     try:
         gclient = connect_google()
         row_data = {
@@ -187,22 +191,26 @@ def _write_result_to_sheet(call, verdict_data):
         }
         res = append_vip_short_result(gclient, VIP_SHORT_SHEET_ID, row_data)
         if res is not True:
-            return str(res)
-    except Exception as e:
-        return str(e)
-    return ""
+            logger.error("Sheets RESULTS write returned non-True: %s", res)
+            return False
+        return True
+    except Exception:
+        logger.exception("Sheets RESULTS write failed")
+        return False
 
 
-def _write_manual_tracking_safe(call, verdict_data) -> str:
+def _write_manual_tracking_safe(call, verdict_data) -> bool:
     """Некритичний запис у ручну трекінг-таблицю (лише Короткий 90 сек)."""
     try:
         gclient = connect_google()
         res = write_vip_short_manual_tracking(gclient, call, verdict_data)
         if res is not True:
-            return str(res)
-    except Exception as e:
-        return str(e)
-    return ""
+            logger.error("Manual tracking sheet write returned non-True: %s", res)
+            return False
+        return True
+    except Exception:
+        logger.exception("Manual tracking sheet write failed")
+        return False
 
 
 def _analyze_single_call(i, call, results_state):
@@ -259,43 +267,55 @@ def _analyze_single_call(i, call, results_state):
                 )
                 verdict_data = score_vip_short_call(facts, call, transcript)
 
-            supabase_error = ""
-            sheet_error = ""
-
+            # Isolate each sink so one failure does not block the others
+            supabase_ok = False
             try:
-                supabase_ok = log_vip_short_call_to_supabase(
-                    call,
-                    facts,
-                    verdict_data,
-                    deepgram_transcript=raw_transcript,
-                    gpt_transcript=transcript,
-                )
-                if not supabase_ok:
-                    supabase_error = st.session_state.get(
-                        "supabase_last_vip_log_error",
-                        "Невідома помилка запису у Supabase",
+                supabase_ok = bool(
+                    log_vip_short_call_to_supabase(
+                        call,
+                        facts,
+                        verdict_data,
+                        deepgram_transcript=raw_transcript,
+                        gpt_transcript=transcript,
                     )
-            except Exception as e:
-                supabase_error = str(e)
+                )
+            except Exception:
+                logger.exception("Supabase insert failed")
 
-            sheet_error = _write_result_to_sheet(call, verdict_data)
-            manual_tracking_error = ""
+            sheet_ok = False
+            try:
+                sheet_ok = _write_result_to_sheet(call, verdict_data)
+            except Exception:
+                logger.exception("Sheets RESULTS write failed")
+
+            manual_ok = True
             if selected != CALL_TYPE_FRIENDLY:
-                manual_tracking_error = _write_manual_tracking_safe(call, verdict_data)
+                try:
+                    manual_ok = _write_manual_tracking_safe(call, verdict_data)
+                except Exception:
+                    logger.exception("Manual tracking sheet write failed")
+                    manual_ok = False
+
             results_state[i] = {
                 "verdict_data": {
                     **verdict_data,
-                    "supabase_error": supabase_error,
-                    "sheet_error": sheet_error,
-                    "manual_tracking_error": manual_tracking_error,
+                    "supabase_write_failed": not supabase_ok,
+                    "sheet_write_failed": not sheet_ok,
+                    "manual_tracking_write_failed": not manual_ok,
                 },
                 "facts": facts,
                 "analysis_done": True,
                 "client_id": call.get("client_id", ""),
             }
             return True
-    except Exception as e:
-        store_analysis_failure(results_state, i, str(e), client_id=call.get("client_id", ""))
+    except Exception:
+        logger.exception("VIP analysis failed")
+        store_analysis_failure(
+            results_state,
+            i,
+            "Аналіз не завершився. Повідомте розробника.",
+            client_id=call.get("client_id", ""),
+        )
         return False
 
 

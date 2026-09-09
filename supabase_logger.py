@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 
 from supabase import create_client
 
 from utils import BUILD_SHA
 
+logger = logging.getLogger(__name__)
+
 SUPABASE_UNAVAILABLE_MESSAGE = (
     "Supabase тимчасово недоступний — нові записи можуть не зберегтися. "
     "Перевірте Secrets або спробуйте пізніше."
 )
+
+# Allowed by vip_short_call_logs_verdict_check (see supabase_migration_vip_scoring_v2.sql).
+ALLOWED_VERDICTS = frozenset({"GREEN", "RED", "green", "red", "scored"})
+
 
 
 def _pick_supabase_credentials(secrets_mapping):
@@ -130,6 +137,14 @@ def _safe_date(value) -> str | None:
     return None
 
 
+def _normalize_verdict(raw) -> str:
+    verdict = str(raw or "scored").strip() or "scored"
+    if verdict not in ALLOWED_VERDICTS:
+        logger.warning("Unexpected verdict %r; storing as 'scored'", verdict)
+        return "scored"
+    return verdict
+
+
 def log_vip_short_call_to_supabase(
     call: dict,
     facts: dict,
@@ -137,10 +152,13 @@ def log_vip_short_call_to_supabase(
     deepgram_transcript: str = "",
     gpt_transcript: str = "",
 ) -> bool:
+    """Insert VIP call log. Never raises; never puts secrets/raw errors into session for UI."""
+    import streamlit as st
+
     client, connect_error = get_supabase_client()
     if client is None:
-        if connect_error:
-            raise RuntimeError(connect_error)
+        logger.error("Supabase client unavailable: %s", connect_error)
+        st.session_state["supabase_last_vip_log_error"] = "unavailable"
         return False
 
     row = {
@@ -168,7 +186,7 @@ def log_vip_short_call_to_supabase(
         "max_score": verdict_data.get("max_score"),
         "percent": verdict_data.get("percent"),
         "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
-        "verdict": verdict_data.get("verdict") or "scored",
+        "verdict": _normalize_verdict(verdict_data.get("verdict")),
         "verdict_reasons": verdict_data.get("verdict_reasons", []),
         "review_flags": verdict_data.get("review_flags", []),
         "debug_data": {
@@ -191,10 +209,12 @@ def log_vip_short_call_to_supabase(
 
     try:
         client.table("vip_short_call_logs").insert(row).execute()
+        st.session_state.pop("supabase_last_vip_log_error", None)
         return True
     except Exception as e:
-        # Fallback without new columns if migration not applied yet
+        logger.exception("Supabase insert failed")
         msg = str(e)
+        # Fallback without new columns if migration not applied yet
         if "column" in msg.lower() or "schema" in msg.lower() or "pgrst" in msg.lower():
             legacy = {
                 k: v
@@ -213,14 +233,10 @@ def log_vip_short_call_to_supabase(
             }
             try:
                 client.table("vip_short_call_logs").insert(legacy).execute()
+                st.session_state.pop("supabase_last_vip_log_error", None)
                 return True
-            except Exception as e2:
-                e = e2
-        import streamlit as st
-
-        key_source = st.session_state.get("supabase_last_key_source", "unknown")
-        key_preview = st.session_state.get("supabase_last_key_preview", "empty")
-        st.session_state["supabase_last_vip_log_error"] = (
-            f"{e} | ключ узято з: {key_source} ({key_preview})"
-        )
+            except Exception:
+                logger.exception("Supabase legacy insert failed")
+        # Opaque flag only — never put exception text / key names into session for UI
+        st.session_state["supabase_last_vip_log_error"] = "insert_failed"
         return False
