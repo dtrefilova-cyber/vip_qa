@@ -53,6 +53,7 @@ def test_build_manual_tracking_column_values_normal():
     call = {
         "call_date": "31.08.2026",
         "client_id": "12345",
+        "ret_manager": "Сорока Анастасія",
         "qa_manager": "Дар'я",
         "check_date": "09.09.2026",
     }
@@ -64,7 +65,7 @@ def test_build_manual_tracking_column_values_normal():
     assert values == [
         "31.08.2026",
         "12345",
-        "Дар'я",
+        "Сорока Анастасія",
         "09.09.2026",
         "5",
         "7.5",
@@ -78,6 +79,7 @@ def test_build_manual_tracking_column_values_critical_slip():
     call = {
         "call_date": "31.08.2026",
         "client_id": "999",
+        "ret_manager": "Крисак Іван",
         "qa_manager": "Дар'я",
         "check_date": "09.09.2026",
         "qa_comment": "тест",
@@ -92,7 +94,7 @@ def test_build_manual_tracking_column_values_critical_slip():
     values = build_manual_tracking_column_values(call, verdict)
     assert values[0] == "31.08.2026"
     assert values[1] == "999"
-    assert values[2] == "Дар'я"
+    assert values[2] == "Крисак Іван"
     assert values[3] == "09.09.2026"
     # бальні рядки порожні (не нулі), гейт позначений
     assert values[4] == ""

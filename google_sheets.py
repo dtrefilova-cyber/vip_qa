@@ -390,7 +390,10 @@ def build_manual_tracking_column_values(
     *,
     listen_date: str = "",
 ) -> list[str]:
-    """9 значень для рядків 1–9 однієї колонки трекінгу."""
+    """9 значень для рядків 1–9 однієї колонки трекінгу.
+
+    Рядок 3 — VIP-менеджер, чий дзвінок аналізували (ret_manager).
+    """
     criteria = verdict_data.get("criteria") or []
     is_critical = bool(verdict_data.get("is_critical_fail"))
     listen = listen_date or call.get("check_date") or call.get("listen_date") or ""
@@ -409,7 +412,7 @@ def build_manual_tracking_column_values(
     return [
         str(call.get("call_date") or ""),
         str(call.get("client_id") or ""),
-        str(call.get("qa_manager") or ""),
+        str(call.get("ret_manager") or call.get("manager") or ""),
         str(listen),
         contact,
         slip,
