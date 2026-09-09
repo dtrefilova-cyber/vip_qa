@@ -161,10 +161,24 @@ def log_vip_short_call_to_supabase(
         st.session_state["supabase_last_vip_log_error"] = "unavailable"
         return False
 
+    _NEW_COLUMNS = {
+        "call_type",
+        "rubric_version",
+        "criteria_facts",
+        "criteria_scores",
+        "total_score",
+        "max_score",
+        "percent",
+        "is_critical_fail",
+        "check_date",
+    }
+
     row = {
         "call_url": call.get("url", ""),
         "client_id": str(call.get("client_id", "")),
         "call_date": _safe_date(call.get("call_date")),
+        # Дата перевірки з UI — для лічильників/архіву (не плутати з датою дзвінка)
+        "check_date": _safe_date(call.get("check_date") or call.get("listen_date")),
         "qa_comment": call.get("qa_comment", ""),
         "important_note": call.get("important_note", ""),
         "bonus_status": call.get("bonus_status", ""),
@@ -216,21 +230,7 @@ def log_vip_short_call_to_supabase(
         msg = str(e)
         # Fallback without new columns if migration not applied yet
         if "column" in msg.lower() or "schema" in msg.lower() or "pgrst" in msg.lower():
-            legacy = {
-                k: v
-                for k, v in row.items()
-                if k
-                not in {
-                    "call_type",
-                    "rubric_version",
-                    "criteria_facts",
-                    "criteria_scores",
-                    "total_score",
-                    "max_score",
-                    "percent",
-                    "is_critical_fail",
-                }
-            }
+            legacy = {k: v for k, v in row.items() if k not in _NEW_COLUMNS}
             try:
                 client.table("vip_short_call_logs").insert(legacy).execute()
                 st.session_state.pop("supabase_last_vip_log_error", None)

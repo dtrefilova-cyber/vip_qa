@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
@@ -32,7 +32,9 @@ def today_kyiv() -> date:
 def iso_check_date(value) -> str | None:
     if value is None:
         return None
-    if hasattr(value, "isoformat"):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
         return value.isoformat()
     text = str(value).strip()
     if len(text) == 10 and text[2] == "." and text[5] == ".":
@@ -41,9 +43,31 @@ def iso_check_date(value) -> str | None:
             return f"{year}-{month}-{day}"
         except ValueError:
             return None
-    if len(text) == 10 and text[4] == "-":
-        return text
+    if len(text) >= 10 and text[4] == "-":
+        return text[:10]
     return None
+
+
+def _kyiv_day_bounds(day_iso: str) -> tuple[str, str] | None:
+    """Inclusive start / exclusive end ISO timestamps for Europe/Kyiv calendar day."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        day = date.fromisoformat(day_iso)
+        tz = ZoneInfo("Europe/Kyiv")
+        start = datetime(day.year, day.month, day.day, tzinfo=tz)
+        end = start + timedelta(days=1)
+        return start.isoformat(), end.isoformat()
+    except Exception:
+        return None
+
+
+def clear_vip_day_cache() -> None:
+    """Invalidate cached day fetches after a successful Supabase insert."""
+    try:
+        fetch_vip_day_rows.clear()
+    except Exception:
+        pass
 
 
 def _parse_debug(row: dict) -> dict:
@@ -62,6 +86,37 @@ def _call_meta(row: dict) -> dict:
     debug = _parse_debug(row)
     call = debug.get("call") if isinstance(debug, dict) else {}
     return call if isinstance(call, dict) else {}
+
+
+def _row_day_iso(row: dict) -> str | None:
+    """Calendar day for counters/archive: check_date (UI), else created_at (Kyiv), else call_date."""
+    explicit = iso_check_date(row.get("check_date")) or iso_check_date(
+        _call_meta(row).get("check_date") or _call_meta(row).get("listen_date")
+    )
+    if explicit:
+        return explicit
+    created = row.get("created_at")
+    if created is not None:
+        try:
+            from zoneinfo import ZoneInfo
+
+            if isinstance(created, datetime):
+                dt = created
+            else:
+                text = str(created).strip().replace("Z", "+00:00")
+                dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+            return dt.astimezone(ZoneInfo("Europe/Kyiv")).date().isoformat()
+        except Exception:
+            created_iso = iso_check_date(created)
+            if created_iso:
+                return created_iso
+    return iso_check_date(row.get("call_date"))
+
+
+def _row_belongs_to_day(row: dict, day_iso: str) -> bool:
+    return _row_day_iso(row) == day_iso
 
 
 def _row_type_key(row: dict) -> str | None:
@@ -100,6 +155,31 @@ def _filter_rows(rows: list[dict], type_key: str | None) -> list[dict]:
         elif rk == wanted:
             out.append(row)
     return out
+
+
+def _merge_rows_by_id(chunks: list[list[dict]]) -> list[dict]:
+    merged: dict = {}
+    order: list = []
+    for chunk in chunks:
+        for row in chunk:
+            rid = row.get("id")
+            key = rid if rid is not None else id(row)
+            if key not in merged:
+                merged[key] = row
+                order.append(key)
+            else:
+                merged[key] = row
+    # Newest first when id is numeric
+    def _sort_key(k):
+        row = merged[k]
+        rid = row.get("id")
+        try:
+            return -int(rid)
+        except (TypeError, ValueError):
+            return 0
+
+    order.sort(key=_sort_key)
+    return [merged[k] for k in order]
 
 
 def _score_blob(row: dict) -> dict:
@@ -143,20 +223,68 @@ def _worst_criterion(score: dict, row: dict) -> str | None:
 
 @st.cache_data(ttl=120, show_spinner=False)
 def fetch_vip_day_rows(check_date_iso: str) -> tuple[list[dict], str | None]:
+    """Rows for UI «Дата перевірки» day — not merely call_date of the audio."""
     client, err = get_supabase_client()
     if client is None:
         return [], err
-    try:
-        day_res = (
+    if not check_date_iso:
+        return [], None
+
+    chunks: list[list[dict]] = []
+    errors: list[str] = []
+
+    def _run(query):
+        try:
+            return list((query.execute().data) or []), None
+        except Exception as exc:
+            return [], str(exc)
+
+    # 1) Explicit check_date column (after migration)
+    rows, e1 = _run(
+        client.table("vip_short_call_logs")
+        .select("*")
+        .eq("check_date", check_date_iso)
+        .order("id", desc=True)
+    )
+    if e1:
+        errors.append(e1)
+    else:
+        chunks.append(rows)
+
+    # 2) Analyses inserted that calendar day (covers rows before check_date column)
+    bounds = _kyiv_day_bounds(check_date_iso)
+    if bounds:
+        start, end = bounds
+        rows, e2 = _run(
             client.table("vip_short_call_logs")
             .select("*")
-            .eq("call_date", check_date_iso)
+            .gte("created_at", start)
+            .lt("created_at", end)
             .order("id", desc=True)
-            .execute()
         )
-        return list(day_res.data or []), None
-    except Exception as exc:
-        return [], str(exc)
+        if e2:
+            errors.append(e2)
+        else:
+            chunks.append(rows)
+
+    # 3) Legacy: only call_date (historical GREEN/RED era)
+    rows, e3 = _run(
+        client.table("vip_short_call_logs")
+        .select("*")
+        .eq("call_date", check_date_iso)
+        .order("id", desc=True)
+    )
+    if e3:
+        errors.append(e3)
+    else:
+        chunks.append(rows)
+
+    if not chunks and errors:
+        return [], errors[0]
+
+    merged = _merge_rows_by_id(chunks)
+    day_rows = [r for r in merged if _row_belongs_to_day(r, check_date_iso)]
+    return day_rows, None
 
 
 def fetch_vip_summary(
@@ -389,17 +517,14 @@ def render_kpi_row(
     today_label = today_kyiv().strftime("%d.%m.%Y")
     if avg_score is not None and max_score is not None:
         avg_label = f"{avg_score:g} / {float(max_score):g}"
-        avg_sub = "середній бал"
     elif avg_score is not None:
         avg_label = f"{avg_score:g}"
-        avg_sub = "середній бал"
     else:
         avg_label = "—"
-        avg_sub = "середній бал"
     render_stat_cards(
         [
             ("📞", "primary", str(total), "Всього дзвінків", date_label),
-            ("★", "green", avg_label, "Середній бал", avg_sub),
+            ("★", "green", avg_label, "Середній бал", date_label),
             ("★", "primary", str(today_count), "Опрацьовано сьогодні", today_label),
         ]
     )

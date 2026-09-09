@@ -49,7 +49,7 @@ from utils import (
     store_analysis_failure,
     transcribe_call_audio,
 )
-from vip_archive import render_archive_section, render_call_type_stats
+from vip_archive import clear_vip_day_cache, render_archive_section, render_call_type_stats
 from vip_short_ai_assistant import (
     VIP_FRIENDLY_FACTS_CACHE_TAG,
     VIP_SHORT_FACTS_CACHE_TAG,
@@ -279,6 +279,8 @@ def _analyze_single_call(i, call, results_state):
                         gpt_transcript=transcript,
                     )
                 )
+                if supabase_ok:
+                    clear_vip_day_cache()
             except Exception:
                 logger.exception("Supabase insert failed")
 

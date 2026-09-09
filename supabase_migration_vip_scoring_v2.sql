@@ -10,7 +10,12 @@ ALTER TABLE vip_short_call_logs
     ADD COLUMN IF NOT EXISTS total_score numeric,
     ADD COLUMN IF NOT EXISTS max_score numeric,
     ADD COLUMN IF NOT EXISTS percent numeric,
-    ADD COLUMN IF NOT EXISTS is_critical_fail boolean DEFAULT false;
+    ADD COLUMN IF NOT EXISTS is_critical_fail boolean DEFAULT false,
+    -- Дата перевірки (UI «Дата перевірки») — окремо від дати самого дзвінка call_date
+    ADD COLUMN IF NOT EXISTS check_date date;
+
+CREATE INDEX IF NOT EXISTS vip_short_call_logs_check_date_idx
+    ON vip_short_call_logs (check_date DESC);
 
 -- Values actually used by the app / historical rows:
 --   scored — core/vip_scoring_common.ScoringResult.to_dict()
