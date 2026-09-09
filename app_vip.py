@@ -13,6 +13,7 @@ from google_sheets import (
     append_vip_short_result,
     connect_google,
     format_vip_score_comment_for_sheet,
+    write_vip_short_manual_tracking,
 )
 from supabase_logger import log_vip_short_call_to_supabase
 from upload_cards import (
@@ -152,6 +153,11 @@ def render_score_badge(verdict_data: dict) -> None:
         st.error(f"Supabase insert error: {verdict_data['supabase_error']}")
     if verdict_data.get("sheet_error"):
         st.error(f"Google Sheets write error: {verdict_data['sheet_error']}")
+    if verdict_data.get("manual_tracking_error"):
+        st.warning(
+            "Ручна трекінг-таблиця RESULTS не оновилась (основний аналіз збережено): "
+            f"{verdict_data['manual_tracking_error']}"
+        )
     if verdict_data.get("analysis_error"):
         st.error(verdict_data["analysis_error"])
 
@@ -180,6 +186,18 @@ def _write_result_to_sheet(call, verdict_data):
             "comment": format_vip_score_comment_for_sheet(verdict_data),
         }
         res = append_vip_short_result(gclient, VIP_SHORT_SHEET_ID, row_data)
+        if res is not True:
+            return str(res)
+    except Exception as e:
+        return str(e)
+    return ""
+
+
+def _write_manual_tracking_safe(call, verdict_data) -> str:
+    """Некритичний запис у ручну трекінг-таблицю (лише Короткий 90 сек)."""
+    try:
+        gclient = connect_google()
+        res = write_vip_short_manual_tracking(gclient, call, verdict_data)
         if res is not True:
             return str(res)
     except Exception as e:
@@ -261,11 +279,15 @@ def _analyze_single_call(i, call, results_state):
                 supabase_error = str(e)
 
             sheet_error = _write_result_to_sheet(call, verdict_data)
+            manual_tracking_error = ""
+            if selected != CALL_TYPE_FRIENDLY:
+                manual_tracking_error = _write_manual_tracking_safe(call, verdict_data)
             results_state[i] = {
                 "verdict_data": {
                     **verdict_data,
                     "supabase_error": supabase_error,
                     "sheet_error": sheet_error,
+                    "manual_tracking_error": manual_tracking_error,
                 },
                 "facts": facts,
                 "analysis_done": True,
@@ -292,6 +314,7 @@ def _process_pending(
     call_type: str,
     qa_manager,
     managers_config,
+    check_date=None,
 ) -> None:
     slug = _slug(call_type)
     keys = _keys(slug)
@@ -303,6 +326,12 @@ def _process_pending(
     results_key = f"results_{call_type}"
     results_state = init_call_results_state(results_key)
     call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+    if check_date is not None:
+        call["check_date"] = (
+            check_date.strftime("%d.%m.%Y")
+            if hasattr(check_date, "strftime")
+            else str(check_date)
+        )
     results_state.pop(card_id - 1, None)
     ok = _analyze_single_call(card_id - 1, call, results_state)
     if ok:
@@ -330,7 +359,7 @@ def _render_call_type_tab(
 
     if pending:
         try:
-            _process_pending(call_type, qa_manager, managers_config)
+            _process_pending(call_type, qa_manager, managers_config, check_date=check_date)
         except Exception as exc:
             st.session_state[keys["pending"]] = []
             st.error(f"Не вдалося запустити аналіз VIP-дзвінка: {exc}")

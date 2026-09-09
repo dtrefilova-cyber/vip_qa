@@ -325,3 +325,165 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
     except Exception:
         pass
     return True
+
+
+# ── Ручна трекінг-таблиця коротких (колонковий RESULTS) ─────────────────
+
+MANUAL_TRACKING_FIRST_COL = 3  # C (B уже зайнята)
+MANUAL_TRACKING_COMMENT_START_ROW = 13
+MANUAL_TRACKING_CRITICAL_MARK = "критична"
+MANUAL_TRACKING_CRITICAL_SUMMARY = "0/30"
+
+
+def col_index_to_letter(col_index: int) -> str:
+    """1-based column index → Excel letter (1=A, 3=C, 27=AA)."""
+    if col_index < 1:
+        raise ValueError(f"col_index must be >= 1, got {col_index}")
+    n = int(col_index)
+    letters = []
+    while n:
+        n, rem = divmod(n - 1, 26)
+        letters.append(chr(65 + rem))
+    return "".join(reversed(letters))
+
+
+def find_next_tracking_column(row1_values: list, first_col: int = MANUAL_TRACKING_FIRST_COL) -> int:
+    """Перша порожня комірка в рядку 1, починаючи з first_col (1-based)."""
+    idx = max(first_col, 1) - 1
+    values = list(row1_values or [])
+    while idx < len(values) and str(values[idx] or "").strip():
+        idx += 1
+    return idx + 1
+
+
+def find_next_comment_row(
+    col_a_values: list,
+    start_row: int = MANUAL_TRACKING_COMMENT_START_ROW,
+) -> int:
+    """Перший порожній рядок у колонці A блоку коментарів (1-based)."""
+    idx = max(start_row, 1) - 1
+    values = list(col_a_values or [])
+    while idx < len(values) and str(values[idx] or "").strip():
+        idx += 1
+    return idx + 1
+
+
+def _criterion_points(criteria: list, key: str) -> str:
+    for item in criteria or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("key") != key:
+            continue
+        pts = item.get("points")
+        if pts is None:
+            return ""
+        try:
+            return f"{float(pts):g}"
+        except (TypeError, ValueError):
+            return str(pts)
+    return ""
+
+
+def build_manual_tracking_column_values(
+    call: dict,
+    verdict_data: dict,
+    *,
+    listen_date: str = "",
+) -> list[str]:
+    """9 значень для рядків 1–9 однієї колонки трекінгу."""
+    criteria = verdict_data.get("criteria") or []
+    is_critical = bool(verdict_data.get("is_critical_fail"))
+    listen = listen_date or call.get("check_date") or call.get("listen_date") or ""
+
+    if is_critical:
+        # Підсумок 0/30 + позначка гейту; бальні рядки не заповнюємо нулями
+        contact = slip = prep = closing = ""
+        critical_cell = MANUAL_TRACKING_CRITICAL_MARK
+    else:
+        contact = _criterion_points(criteria, "contact")
+        slip = _criterion_points(criteria, "slip_handling")
+        prep = _criterion_points(criteria, "prep")
+        closing = _criterion_points(criteria, "closing")
+        critical_cell = ""
+
+    return [
+        str(call.get("call_date") or ""),
+        str(call.get("client_id") or ""),
+        str(call.get("qa_manager") or ""),
+        str(listen),
+        contact,
+        slip,
+        critical_cell,
+        prep,
+        closing,
+    ]
+
+
+def build_manual_tracking_comment_text(call: dict, verdict_data: dict) -> str:
+    """Текст для колонки B блоку коментарів."""
+    parts = []
+    if verdict_data.get("is_critical_fail"):
+        parts.append(MANUAL_TRACKING_CRITICAL_SUMMARY)
+        crit = "; ".join(verdict_data.get("critical_reasons") or []) or "критична помилка"
+        parts.append(f"КРИТИЧНА ПОМИЛКА: {crit}")
+    note = str(call.get("qa_comment") or "").strip()
+    if note:
+        parts.append(note)
+    # Якщо коментаря QA немає — коротка розбивка критеріїв (як у звичайному RESULTS)
+    if not note and not verdict_data.get("is_critical_fail"):
+        scored = format_vip_score_comment_for_sheet(verdict_data)
+        if scored and scored != "— Дзвінок без зауважень.":
+            parts.append(scored)
+    return "\n".join(parts) if parts else ""
+
+
+def write_vip_short_manual_tracking(
+    google_client,
+    call: dict,
+    verdict_data: dict,
+    *,
+    spreadsheet_id: str | None = None,
+    worksheet_name: str | None = None,
+) -> bool | str:
+    """Запис короткого дзвінка в ручну колонкову таблицю RESULTS.
+
+    Не чіпає VIP_SHORT_SHEET_ID. Повертає True або текст помилки.
+    """
+    from constants import (
+        VIP_SHORT_MANUAL_TRACKING_SHEET_ID,
+        VIP_SHORT_MANUAL_TRACKING_WORKSHEET,
+    )
+
+    sheet_id = spreadsheet_id or VIP_SHORT_MANUAL_TRACKING_SHEET_ID
+    ws_name = worksheet_name or VIP_SHORT_MANUAL_TRACKING_WORKSHEET
+    workbook = google_client.open_by_key(sheet_id)
+    worksheet = workbook.worksheet(ws_name)
+
+    row1 = sheets_retry(worksheet.row_values, 1)
+    col_idx = find_next_tracking_column(row1, MANUAL_TRACKING_FIRST_COL)
+    col_letter = col_index_to_letter(col_idx)
+
+    column_values = build_manual_tracking_column_values(
+        call,
+        verdict_data,
+        listen_date=str(call.get("check_date") or call.get("listen_date") or ""),
+    )
+    # Для критичного зливу підсумок 0/30 також дублюємо у коментарі; у колонці — позначка гейту
+    range_main = f"{col_letter}1:{col_letter}9"
+    try:
+        sheets_retry(worksheet.update, range_main, [[v] for v in column_values])
+    except Exception as e:
+        return str(e)
+
+    col_a = sheets_retry(worksheet.col_values, 1)
+    comment_row = find_next_comment_row(col_a, MANUAL_TRACKING_COMMENT_START_ROW)
+    comment_text = build_manual_tracking_comment_text(call, verdict_data)
+    try:
+        sheets_retry(
+            worksheet.update,
+            f"A{comment_row}:B{comment_row}",
+            [[str(call.get("client_id") or ""), comment_text]],
+        )
+    except Exception as e:
+        return str(e)
+    return True
