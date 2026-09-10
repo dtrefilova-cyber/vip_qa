@@ -6,6 +6,7 @@ import html
 
 import streamlit as st
 
+from audio_url import normalize_audio_url
 from constants import (
     CALL_TYPE_FRIENDLY,
     CALL_TYPE_SHORT_90S,
@@ -100,7 +101,7 @@ def _date_key(call_type: str, card_id: int) -> str:
 
 
 def _has_url(call_type: str, card_id: int) -> bool:
-    return bool(str(st.session_state.get(_url_key(call_type, card_id)) or "").strip())
+    return bool(normalize_audio_url(str(st.session_state.get(_url_key(call_type, card_id)) or "")))
 
 
 def required_errors(call_type: str, card_id: int, projects_list: list) -> dict[str, str]:
@@ -137,7 +138,7 @@ def collect_card_call(
     betking_x2 = project.lower() == "betking"
     selected_type = CALL_TYPE_FRIENDLY if call_type == CALL_TYPE_FRIENDLY else CALL_TYPE_SHORT_90S
     return {
-        "url": str(st.session_state.get(_url_key(call_type, card_id)) or "").strip(),
+        "url": normalize_audio_url(str(st.session_state.get(_url_key(call_type, card_id)) or "")),
         "ret_manager": ret_manager,
         "project": project,
         "tl": manager_meta.get("tl", ""),
