@@ -27,6 +27,10 @@ def _keys(slug: str) -> dict[str, str]:
         "next_id": f"vip_upload_next_id_{slug}",
         "errors": f"vip_upload_errors_{slug}",
         "pending": f"vip_upload_pending_{slug}",
+        "queued": f"vip_upload_queued_{slug}",
+        "batch_total": f"vip_upload_batch_total_{slug}",
+        "batch_ok": f"vip_upload_batch_ok_{slug}",
+        "batch_fail": f"vip_upload_batch_fail_{slug}",
         "visible": f"vip_upload_visible_{slug}",
         "body": f"vip_upload_body_{slug}",
     }
@@ -52,6 +56,8 @@ def ensure_card_state(call_type: str) -> list[dict]:
         st.session_state[keys["errors"]] = {}
     if keys["pending"] not in st.session_state:
         st.session_state[keys["pending"]] = []
+    if keys["queued"] not in st.session_state:
+        st.session_state[keys["queued"]] = {}
     if keys["visible"] not in st.session_state:
         st.session_state[keys["visible"]] = True
     cards = st.session_state[keys["cards"]]
@@ -149,6 +155,60 @@ def collect_card_call(
     }
 
 
+def format_check_date(check_date) -> str:
+    if check_date is None:
+        return ""
+    if hasattr(check_date, "strftime"):
+        return check_date.strftime("%d.%m.%Y")
+    return str(check_date)
+
+
+def enqueue_card(
+    call_type: str,
+    card_id: int,
+    *,
+    managers_config: list,
+    qa_manager: str,
+    check_date=None,
+) -> None:
+    """Додає картку в чергу і зберігає знімок полів, щоб наступні rerun не загубили дані."""
+    keys = _keys(_slug(call_type))
+    pending = list(st.session_state.get(keys["pending"]) or [])
+    was_idle = not pending
+    if card_id not in pending:
+        pending.append(card_id)
+    st.session_state[keys["pending"]] = pending
+
+    call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+    if check_date is not None:
+        call["check_date"] = format_check_date(check_date)
+    queued = dict(st.session_state.get(keys["queued"]) or {})
+    queued[str(card_id)] = call
+    st.session_state[keys["queued"]] = queued
+
+    if was_idle:
+        st.session_state[keys["batch_ok"]] = 0
+        st.session_state[keys["batch_fail"]] = 0
+    st.session_state[keys["batch_total"]] = len(pending)
+
+
+def pop_queued_call(call_type: str, card_id: int) -> dict | None:
+    keys = _keys(_slug(call_type))
+    queued = dict(st.session_state.get(keys["queued"]) or {})
+    call = queued.pop(str(card_id), None)
+    st.session_state[keys["queued"]] = queued
+    return call
+
+
+def pending_progress(call_type: str) -> tuple[int, int]:
+    """Повертає (поточний порядковий, усього в батчі) після pop з черги."""
+    keys = _keys(_slug(call_type))
+    remaining = len(st.session_state.get(keys["pending"]) or [])
+    total = int(st.session_state.get(keys["batch_total"]) or (remaining + 1))
+    current = max(1, total - remaining)
+    return current, total
+
+
 def render_upload_toolbar(call_type: str, cards: list[dict], projects_list: list) -> str | None:
     slug = _slug(call_type)
     keys = _keys(slug)
@@ -236,6 +296,9 @@ def _delete_card(call_type: str, card_id: int) -> None:
     st.session_state[keys["pending"]] = [
         x for x in st.session_state.get(keys["pending"], []) if x != card_id
     ]
+    queued = dict(st.session_state.get(keys["queued"]) or {})
+    queued.pop(str(card_id), None)
+    st.session_state[keys["queued"]] = queued
 
 
 def _managers_for_project(managers_config: list, project: str) -> list[str]:
@@ -256,6 +319,8 @@ def render_vip_card(
     projects_list: list[str],
     managers_config: list,
     analyzing: bool,
+    qa_manager: str = "",
+    check_date=None,
 ) -> None:
     card_id = int(card.get("id") or card.get("number") or 1)
     number = int(card.get("number") or card_id)
@@ -428,10 +493,13 @@ def render_vip_card(
             if invalid:
                 st.session_state.setdefault(_keys(slug)["errors"], {})[card_id] = invalid
                 st.rerun()
-            pending = list(st.session_state.get(_keys(slug)["pending"]) or [])
-            if card_id not in pending:
-                pending.append(card_id)
-            st.session_state[_keys(slug)["pending"]] = pending
+            enqueue_card(
+                call_type,
+                card_id,
+                managers_config=managers_config,
+                qa_manager=qa_manager,
+                check_date=check_date,
+            )
             st.rerun()
 
 
@@ -445,13 +513,22 @@ def handle_add_card(call_type: str) -> None:
     st.rerun()
 
 
-def queue_all_ready(call_type: str, cards: list[dict], projects_list: list) -> None:
-    slug = _slug(call_type)
-    keys = _keys(slug)
-    pending = list(st.session_state.get(keys["pending"]) or [])
+def queue_all_ready(
+    call_type: str,
+    cards: list[dict],
+    projects_list: list,
+    *,
+    managers_config: list,
+    qa_manager: str,
+    check_date=None,
+) -> None:
     for card in cards:
         cid = card["id"]
         if _has_url(call_type, cid) and not required_errors(call_type, cid, projects_list):
-            if cid not in pending:
-                pending.append(cid)
-    st.session_state[keys["pending"]] = pending
+            enqueue_card(
+                call_type,
+                cid,
+                managers_config=managers_config,
+                qa_manager=qa_manager,
+                check_date=check_date,
+            )
