@@ -8,7 +8,12 @@ import streamlit as st
 
 from app_vip import run_call_type_page
 from chrome import setup_page
-from constants import CALL_TYPE_FRIENDLY, CALL_TYPE_SHORT_90S, VIP_SHORT_SHEET_ID
+from constants import (
+    CALL_TYPE_FRIENDLY,
+    CALL_TYPE_SHORT_90S,
+    VIP_MANAGERS_SHEET_ID,
+    VIP_MANAGERS_WORKSHEET,
+)
 from google_sheets import connect_google, load_vip_short_managers
 from presence import start_presence_heartbeat
 from utils import transcribe_audio_cached
@@ -30,10 +35,10 @@ CALL_PAGE_META = {
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_vip_managers_cached():
+def load_vip_managers_cached(spreadsheet_id: str = VIP_MANAGERS_SHEET_ID):
     try:
         gclient = connect_google()
-        return load_vip_short_managers(gclient, VIP_SHORT_SHEET_ID)
+        return load_vip_short_managers(gclient, spreadsheet_id, VIP_MANAGERS_WORKSHEET)
     except Exception as e:
         st.error(f"Не вдалось завантажити менеджерів VIP: {e}")
         return []

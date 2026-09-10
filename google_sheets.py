@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import time
+import unicodedata
 
 import gspread
 import requests.exceptions
@@ -224,20 +225,60 @@ def load_active_users(google_client, log_sheet_id, ttl_seconds=180):
     return active
 
 
-def load_vip_short_managers(google_client, spreadsheet_id, worksheet_name="MANAGERS"):
-    """Зчитує PROJECT/TL/MANAGER з аркуша MANAGERS таблиці VIP короткі, з рядка 2."""
-    worksheet = google_client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
-    values = sheets_retry(worksheet.get_all_values)
+_HEADER_MARKERS = {
+    "project",
+    "проєкт",
+    "проект",
+    "tl",
+    "тімлід",
+    "тимлид",
+    "manager",
+    "менеджер",
+}
 
+
+def clean_sheet_cell(value) -> str:
+    """Прибирає невидимі символи, щоб ім'я на кшталт «Шмирьов Олексій» не губилось у селекті."""
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return text.replace("\ufeff", "").strip()
+
+
+def _is_managers_header_row(row: list) -> bool:
+    cells = [clean_sheet_cell(c).casefold() for c in (row or [])[:3]]
+    if not cells:
+        return False
+    return any(cell in _HEADER_MARKERS for cell in cells)
+
+
+def parse_managers_sheet_values(values: list[list]) -> list[dict]:
+    """Парсить аркуш MANAGERS: PROJECT / TL / MANAGER, пропускає заголовок і порожні рядки."""
     rows = []
-    for row in values[1:]:
-        project = row[0].strip() if len(row) > 0 else ""
-        tl = row[1].strip() if len(row) > 1 else ""
-        manager = row[2].strip() if len(row) > 2 else ""
+    started = False
+    for raw in values or []:
+        row = list(raw or [])
+        if not started:
+            if _is_managers_header_row(row):
+                started = True
+                continue
+            # Немає рядка-заголовка — цей рядок уже дані
+            started = True
+        if _is_managers_header_row(row):
+            continue
+        project = clean_sheet_cell(row[0]) if len(row) > 0 else ""
+        tl = clean_sheet_cell(row[1]) if len(row) > 1 else ""
+        manager = clean_sheet_cell(row[2]) if len(row) > 2 else ""
         if not manager:
             continue
         rows.append({"project": project, "tl": tl, "manager": manager})
     return rows
+
+
+def load_vip_short_managers(google_client, spreadsheet_id, worksheet_name="MANAGERS"):
+    """Зчитує PROJECT/TL/MANAGER з аркуша MANAGERS."""
+    worksheet = google_client.open_by_key(spreadsheet_id).worksheet(worksheet_name)
+    values = sheets_retry(worksheet.get_all_values)
+    return parse_managers_sheet_values(values)
 
 
 VIP_RESULT_CELL_COLORS = {
