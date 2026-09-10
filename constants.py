@@ -24,12 +24,14 @@ FORBIDDEN_WORDS = [
     "Бездеп",
 ]
 
-# Таблиця "VIP короткі": аркуш MANAGERS і RESULTS
+# Операційна таблиця VIP: аркуш RESULTS (бальні записи)
 VIP_SHORT_SHEET_ID = "1ww7dFbI8Gw7Ji96ssgSKBtlvv739xrAL9bNTfCiWqOc"
 
-# Ручна QA трекінг-таблиця коротких (колонковий RESULTS) — окремо від VIP_SHORT_SHEET_ID
+# Довідник менеджерів (аркуш MANAGERS) + ручна колонкова трекінг-таблиця
 VIP_SHORT_MANUAL_TRACKING_SHEET_ID = "1sse7mivevTjwn5PE8o1Nwb26_9PTKXeFrrrTygCL2x0"
 VIP_SHORT_MANUAL_TRACKING_WORKSHEET = "RESULTS"
+VIP_MANAGERS_SHEET_ID = VIP_SHORT_MANUAL_TRACKING_SHEET_ID
+VIP_MANAGERS_WORKSHEET = "MANAGERS"
 
 CALL_TYPE_SHORT_90S = "Короткий 90 сек"
 CALL_TYPE_FRIENDLY = "VIP Friendly (2-й дзвінок)"

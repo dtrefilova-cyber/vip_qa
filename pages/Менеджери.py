@@ -10,7 +10,7 @@ from vip_ui import load_managers_context
 setup_page("Менеджери", active="managers")
 render_page_header(
     "Менеджери",
-    "Довідник VIP-менеджерів з окремого Google Sheet VIP_SHORT_SHEET_ID",
+    "Довідник VIP-менеджерів з аркуша MANAGERS (таблиця VIP_MANAGERS_SHEET_ID)",
 )
 
 managers_config, _, _ = load_managers_context()

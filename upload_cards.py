@@ -241,10 +241,11 @@ def _delete_card(call_type: str, card_id: int) -> None:
 def _managers_for_project(managers_config: list, project: str) -> list[str]:
     if not project:
         return clean_select_options(m.get("manager") for m in managers_config)
+    wanted = str(project).strip().casefold()
     return clean_select_options(
         m.get("manager")
         for m in managers_config
-        if str(m.get("project") or "").strip() == project
+        if str(m.get("project") or "").strip().casefold() == wanted
     )
 
 
