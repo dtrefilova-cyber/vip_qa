@@ -26,7 +26,10 @@ from upload_cards import (
     card_rows,
     collect_card_call,
     ensure_card_state,
+    format_check_date,
     handle_add_card,
+    pending_progress,
+    pop_queued_call,
     queue_all_ready,
     render_add_calls_button,
     render_upload_toolbar,
@@ -213,9 +216,10 @@ def _write_manual_tracking_safe(call, verdict_data) -> bool:
         return False
 
 
-def _analyze_single_call(i, call, results_state):
+def _analyze_single_call(i, call, results_state, spinner_label=None):
     try:
-        with st.spinner(f"Аналіз VIP-дзвінка {i + 1}..."):
+        label = spinner_label or f"Аналіз VIP-дзвінка {i + 1}..."
+        with st.spinner(label):
             raw_transcript, _, _, transcribe_error, timed_transcript = transcribe_call_audio(call)
             if not raw_transcript:
                 store_analysis_failure(
@@ -332,6 +336,44 @@ def _render_vip_results(call_type: str, card_id: int) -> None:
     render_score_badge(verdict_data)
 
 
+def _record_batch_progress(call_type: str, card_id: int, ok: bool) -> None:
+    keys = _keys(_slug(call_type))
+    if ok:
+        st.session_state[keys["batch_ok"]] = int(st.session_state.get(keys["batch_ok"]) or 0) + 1
+    else:
+        st.session_state[keys["batch_fail"]] = int(st.session_state.get(keys["batch_fail"]) or 0) + 1
+
+    remaining = len(st.session_state.get(keys["pending"]) or [])
+    total = int(st.session_state.get(keys["batch_total"]) or 1)
+    done_ok = int(st.session_state.get(keys["batch_ok"]) or 0)
+    done_fail = int(st.session_state.get(keys["batch_fail"]) or 0)
+
+    if remaining:
+        status = "проаналізовано" if ok else "не проаналізовано"
+        set_analysis_run_summary(
+            f"Дзвінок {card_id} {status}. Далі ще {remaining} — аналіз по черзі.",
+            level="success" if ok else "warning",
+        )
+        return
+
+    if done_fail and done_ok:
+        set_analysis_run_summary(
+            f"Оброблено {total}: {done_ok} успішно, {done_fail} з помилкою.",
+            level="warning",
+        )
+    elif done_fail:
+        message = (
+            f"Дзвінок {card_id} не проаналізовано."
+            if total == 1
+            else f"Не вдалося проаналізувати {done_fail} дзвінки."
+        )
+        set_analysis_run_summary(message, level="error")
+    elif total > 1:
+        set_analysis_run_summary(f"Проаналізовано {total} дзвінки.", level="success")
+    else:
+        set_analysis_run_summary(f"Дзвінок {card_id} проаналізовано.", level="success")
+
+
 def _process_pending(
     call_type: str,
     qa_manager,
@@ -347,19 +389,20 @@ def _process_pending(
     st.session_state[keys["pending"]] = pending
     results_key = f"results_{call_type}"
     results_state = init_call_results_state(results_key)
-    call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+    call = pop_queued_call(call_type, card_id)
+    if not call:
+        call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
     if check_date is not None:
-        call["check_date"] = (
-            check_date.strftime("%d.%m.%Y")
-            if hasattr(check_date, "strftime")
-            else str(check_date)
-        )
+        call["check_date"] = format_check_date(check_date)
     results_state.pop(card_id - 1, None)
-    ok = _analyze_single_call(card_id - 1, call, results_state)
-    if ok:
-        set_analysis_run_summary(f"Дзвінок {card_id} проаналізовано.", level="success")
-    else:
-        set_analysis_run_summary(f"Дзвінок {card_id} не проаналізовано.", level="error")
+    current, total = pending_progress(call_type)
+    spinner = (
+        f"Аналіз VIP-дзвінка {card_id} ({current} з {total})..."
+        if total > 1
+        else f"Аналіз VIP-дзвінка {card_id}..."
+    )
+    ok = _analyze_single_call(card_id - 1, call, results_state, spinner_label=spinner)
+    _record_batch_progress(call_type, card_id, ok)
 
 
 def _render_call_type_tab(
@@ -378,13 +421,21 @@ def _render_call_type_tab(
     init_call_results_state(results_key)
     pending = st.session_state.get(keys["pending"]) or []
     analyzing = bool(pending)
+    processed = False
 
     if pending:
         try:
             _process_pending(call_type, qa_manager, managers_config, check_date=check_date)
+            processed = True
         except Exception as exc:
             st.session_state[keys["pending"]] = []
-            st.error(f"Не вдалося запустити аналіз VIP-дзвінка: {exc}")
+            st.session_state[keys["queued"]] = {}
+            set_analysis_run_summary(
+                "Не вдалося запустити аналіз VIP-дзвінка. Повідомте розробника.",
+                level="error",
+            )
+            logger.exception("VIP pending queue failed: %s", exc)
+            st.error("Не вдалося запустити аналіз VIP-дзвінка. Повідомте розробника.")
 
     render_call_type_stats(call_type, slug, check_date)
     render_analysis_run_summary()
@@ -402,6 +453,8 @@ def _render_call_type_tab(
                             projects_list=projects_list,
                             managers_config=managers_config,
                             analyzing=analyzing,
+                            qa_manager=qa_manager,
+                            check_date=check_date,
                         )
                         _render_vip_results(call_type, card["id"])
 
@@ -409,10 +462,21 @@ def _render_call_type_tab(
                 handle_add_card(call_type)
 
             if action == "run":
-                queue_all_ready(call_type, cards, projects_list)
+                queue_all_ready(
+                    call_type,
+                    cards,
+                    projects_list,
+                    managers_config=managers_config,
+                    qa_manager=qa_manager,
+                    check_date=check_date,
+                )
                 st.rerun()
 
     render_archive_section(call_type=call_type, slug=slug, check_date=check_date)
+
+    # Один дзвінок за скрипт: після UI запускаємо наступний rerun, щоб не паралелити GPT/Deepgram.
+    if processed:
+        st.rerun()
 
 
 def run_call_type_page(
