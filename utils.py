@@ -11,6 +11,8 @@ import requests
 import streamlit as st
 from openai import OpenAI
 
+from audio_url import friendly_transcribe_error, normalize_audio_url
+
 
 def get_build_sha() -> str:
     try:
@@ -473,40 +475,129 @@ def _build_deepgram_params(model, keyterms=()):
     return list(base_params.items()) + keyterm_params
 
 
-def _request_deepgram(*, url, keyterms=(), model="nova-3"):
-    model = normalize_deepgram_model(model)
-    params = _build_deepgram_params(model, keyterms)
-    headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-    response = requests.post(
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024
+
+
+def _deepgram_fail(error: str) -> dict:
+    return {
+        "ok": False,
+        "error": friendly_transcribe_error(error),
+        "transcript": None,
+        "duration": 0.0,
+    }
+
+
+def _post_deepgram(*, params, headers, timeout, json=None, data=None):
+    return requests.post(
         "https://api.deepgram.com/v1/listen",
         headers=headers,
         params=params,
-        json={"url": url},
-        timeout=60,
+        json=json,
+        data=data,
+        timeout=timeout,
     )
+
+
+def _download_audio_bytes(url: str) -> tuple[bytes, str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; VIP-QA/1.0)",
+        "Accept": "*/*",
+    }
+    session = requests.Session()
+    response = session.get(url, headers=headers, timeout=60, allow_redirects=True, stream=True)
+    if "drive.google.com" in url and "text/html" in (response.headers.get("Content-Type") or ""):
+        confirm = None
+        for cookie_name, cookie_value in response.cookies.items():
+            if cookie_name.startswith("download_warning"):
+                confirm = cookie_value
+                break
+        if confirm:
+            response = session.get(
+                url,
+                headers=headers,
+                params={"confirm": confirm},
+                timeout=60,
+                allow_redirects=True,
+                stream=True,
+            )
+    response.raise_for_status()
+    content_type = (response.headers.get("Content-Type") or "application/octet-stream").split(";")[0]
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > _MAX_AUDIO_BYTES:
+            raise ValueError("audio too large")
+        chunks.append(chunk)
+    payload = b"".join(chunks)
+    if not payload:
+        raise ValueError("empty audio")
+    if content_type.startswith("text/html"):
+        raise ValueError("html instead of audio")
+    return payload, content_type or "application/octet-stream"
+
+
+def _request_deepgram_bytes(url, keyterms=(), model="nova-3"):
+    audio, content_type = _download_audio_bytes(url)
+    params = _build_deepgram_params(model, keyterms)
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": content_type or "application/octet-stream",
+    }
+    response = _post_deepgram(params=params, headers=headers, timeout=120, data=audio)
     if response.status_code != 200:
-        return {
-            "ok": False,
-            "error": f"Deepgram error: {response.text}",
-            "transcript": None,
-            "duration": 0.0,
-        }
+        return _deepgram_fail(f"Deepgram error: {response.text}")
     return _parse_deepgram_response(response.json())
 
 
+def _should_retry_with_bytes(error: str) -> bool:
+    low = str(error or "").lower()
+    return any(
+        token in low
+        for token in (
+            "payload_error",
+            "failed to parse url",
+            "failed to fetch",
+            "unable to download",
+            "remote media",
+        )
+    )
+
+
+def _request_deepgram(*, url, keyterms=(), model="nova-3"):
+    model = normalize_deepgram_model(model)
+    params = _build_deepgram_params(model, keyterms)
+    headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    response = _post_deepgram(
+        params=params,
+        headers=headers,
+        timeout=60,
+        json={"url": url},
+    )
+    if response.status_code == 200:
+        return _parse_deepgram_response(response.json())
+    error_text = response.text or str(response.status_code)
+    if _should_retry_with_bytes(error_text):
+        try:
+            return _request_deepgram_bytes(url, keyterms=keyterms, model=model)
+        except Exception:
+            pass
+    return _deepgram_fail(f"Deepgram error: {error_text}")
+
+
 def _transcribe_audio_impl(url, keyterms=(), model="nova-3"):
+    url = normalize_audio_url(url)
     if not url:
-        return {"ok": False, "error": "empty url", "transcript": None, "duration": 0.0}
+        return _deepgram_fail("empty url")
     try:
         return _request_deepgram(url=url, keyterms=keyterms, model=model)
     except Exception as exc:
-        return {
-            "ok": False,
-            "error": f"Transcription exception: {str(exc)}",
-            "transcript": None,
-            "duration": 0.0,
-            "long_pause_count": 0,
-        }
+        return _deepgram_fail(f"Transcription exception: {str(exc)}")
 
 
 class TranscriptionFailed(RuntimeError):
@@ -527,14 +618,14 @@ if st.session_state.pop("_clear_transcript_cache", False):
 
 
 def transcribe_audio(url, keyterms=(), model=None):
-    if not str(url or "").strip():
-        return None, 0.0, 0, "empty url", ""
+    url = normalize_audio_url(url)
+    if not url:
+        return None, 0.0, 0, friendly_transcribe_error("empty url"), ""
     model = model or get_deepgram_model()
     try:
         result = transcribe_audio_cached(url, keyterms=tuple(keyterms), model=model)
     except TranscriptionFailed as exc:
-        error = str(exc)
-        st.error(error)
+        error = friendly_transcribe_error(str(exc))
         _log_deepgram_debug("url", model=model, url=url, error=error)
         return None, 0.0, 0, error, ""
     _log_deepgram_debug(
@@ -556,10 +647,9 @@ def transcribe_audio(url, keyterms=(), model=None):
 
 
 def transcribe_call_audio(call, keyterms=(), model=None):
-    url = str(call.get("url") or "").strip()
+    url = normalize_audio_url(str(call.get("url") or ""))
     if not url:
-        error = "Не вказано посилання на аудіо"
-        st.error(error)
+        error = friendly_transcribe_error("empty url")
         return None, 0.0, 0, error, ""
     return transcribe_audio(url, keyterms=keyterms, model=model)
 
