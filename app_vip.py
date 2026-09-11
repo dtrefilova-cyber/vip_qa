@@ -16,6 +16,7 @@ from google_sheets import (
     append_vip_short_result,
     connect_google,
     format_vip_score_comment_for_sheet,
+    write_vip_friendly_manual_tracking,
     write_vip_short_manual_tracking,
 )
 from supabase_logger import log_vip_short_call_to_supabase
@@ -203,10 +204,14 @@ def _write_result_to_sheet(call, verdict_data) -> bool:
 
 
 def _write_manual_tracking_safe(call, verdict_data) -> bool:
-    """Некритичний запис у ручну трекінг-таблицю (лише Короткий 90 сек)."""
+    """Некритичний запис у ручну трекінг-таблицю (короткі → RESULTS, Friendly → RESULTS FRIENDLY)."""
     try:
         gclient = connect_google()
-        res = write_vip_short_manual_tracking(gclient, call, verdict_data)
+        selected = str(call.get("vip_call_type") or CALL_TYPE_SHORT_90S)
+        if selected == CALL_TYPE_FRIENDLY:
+            res = write_vip_friendly_manual_tracking(gclient, call, verdict_data)
+        else:
+            res = write_vip_short_manual_tracking(gclient, call, verdict_data)
         if res is not True:
             logger.error("Manual tracking sheet write returned non-True: %s", res)
             return False
@@ -295,12 +300,11 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                 logger.exception("Sheets RESULTS write failed")
 
             manual_ok = True
-            if selected != CALL_TYPE_FRIENDLY:
-                try:
-                    manual_ok = _write_manual_tracking_safe(call, verdict_data)
-                except Exception:
-                    logger.exception("Manual tracking sheet write failed")
-                    manual_ok = False
+            try:
+                manual_ok = _write_manual_tracking_safe(call, verdict_data)
+            except Exception:
+                logger.exception("Manual tracking sheet write failed")
+                manual_ok = False
 
             results_state[i] = {
                 "verdict_data": {
