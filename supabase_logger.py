@@ -82,8 +82,12 @@ def get_supabase_client():
     except Exception as e:
         return None, f"ERROR: не вдалось прочитати st.secrets: {e}"
 
-    st.session_state["supabase_last_key_source"] = key_source or "unknown"
-    st.session_state["supabase_last_key_preview"] = _mask_key_preview(key)
+    # Не падати, якщо виклик з @st.cache_data (запис у session_state заборонений)
+    try:
+        st.session_state["supabase_last_key_source"] = key_source or "unknown"
+        st.session_state["supabase_last_key_preview"] = _mask_key_preview(key)
+    except Exception:
+        pass
 
     if not url:
         return None, (

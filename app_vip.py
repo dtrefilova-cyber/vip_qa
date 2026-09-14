@@ -57,6 +57,7 @@ from vip_archive import clear_vip_day_cache, render_archive_section, render_call
 from vip_short_ai_assistant import (
     VIP_FRIENDLY_FACTS_CACHE_TAG,
     VIP_SHORT_FACTS_CACHE_TAG,
+    VipFactsExtractionError,
     extract_vip_friendly_facts,
     extract_vip_short_90s_facts,
 )
@@ -152,7 +153,12 @@ def render_score_badge(verdict_data: dict) -> None:
         label = item.get("label") or item.get("key") or "criterion"
         pts = item.get("points")
         mx = item.get("max_points")
-        st.write(f"**{label}:** {pts:g} / {mx:g}")
+        try:
+            pts_txt = f"{float(pts):g}" if pts is not None else "—"
+            mx_txt = f"{float(mx):g}" if mx is not None else "—"
+        except (TypeError, ValueError):
+            pts_txt, mx_txt = str(pts), str(mx)
+        st.write(f"**{label}:** {pts_txt} / {mx_txt}")
         for reason in item.get("reasons") or []:
             st.caption(f"— {reason}")
 
@@ -219,6 +225,26 @@ def _write_manual_tracking_safe(call, verdict_data) -> bool:
     except Exception:
         logger.exception("Manual tracking sheet write failed")
         return False
+
+
+def _user_safe_analysis_error(exc: BaseException) -> str:
+    """Коротке повідомлення для QA без сирих stack/secret деталей."""
+    if isinstance(exc, VipFactsExtractionError):
+        return str(exc)
+    msg = str(exc or "").lower()
+    name = type(exc).__name__.lower()
+    if "streamlit" in name or "cannot be called" in msg or "cached" in msg:
+        return (
+            "Тимчасова помилка інтерфейсу під час аналізу. "
+            "Оновіть сторінку і спробуйте ще раз."
+        )
+    if "timeout" in msg or "timed out" in msg:
+        return "Аналіз перевищив час очікування. Спробуйте ще раз."
+    if "openai" in msg or "rate limit" in msg or "429" in msg:
+        return "Помилка AI-моделі. Спробуйте ще раз за хвилину."
+    if "validation" in msg or "pydantic" in msg:
+        return "Не вдалося розібрати результат аналізу. Спробуйте ще раз."
+    return "Аналіз не завершився. Повідомте розробника."
 
 
 def _analyze_single_call(i, call, results_state, spinner_label=None):
@@ -318,12 +344,12 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                 "client_id": call.get("client_id", ""),
             }
             return True
-    except Exception:
+    except Exception as exc:
         logger.exception("VIP analysis failed")
         store_analysis_failure(
             results_state,
             i,
-            "Аналіз не завершився. Повідомте розробника.",
+            _user_safe_analysis_error(exc),
             client_id=call.get("client_id", ""),
         )
         return False
