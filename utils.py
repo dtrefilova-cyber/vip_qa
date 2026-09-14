@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import subprocess
@@ -13,6 +14,7 @@ from openai import OpenAI
 
 from audio_url import friendly_transcribe_error, normalize_audio_url
 
+logger = logging.getLogger(__name__)
 
 def get_build_sha() -> str:
     try:
@@ -826,8 +828,9 @@ def clean_transcript_cached(
         cleaned_text = res.choices[0].message.content.strip()
         _save_persisted_cleaned_transcript(cache_key, cleaned_text)
         return cleaned_text
-    except Exception as e:
-        st.warning(f"Помилка обробки транскрипту: {e}")
+    except Exception:
+        # Без st.* — ця функція під @st.cache_data
+        logger.exception("Transcript clean failed; returning raw transcript")
         return raw_transcript
 
 
