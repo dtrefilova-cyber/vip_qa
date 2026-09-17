@@ -1,17 +1,23 @@
 """Тести ручного колонкового RESULTS / RESULTS FRIENDLY."""
 
 from google_sheets import (
-    FRIENDLY_MANUAL_TRACKING_FIRST_COL,
+    FRIENDLY_MANUAL_CONTACT_ROW,
     FRIENDLY_MANUAL_TRACKING_COMMENT_START_ROW,
+    FRIENDLY_MANUAL_TRACKING_DATA_END_ROW,
+    FRIENDLY_MANUAL_TRACKING_DATA_START_ROW,
+    FRIENDLY_MANUAL_TRACKING_FIRST_COL,
     MANUAL_TRACKING_CRITICAL_MARK,
     MANUAL_TRACKING_CRITICAL_SUMMARY,
+    SHORT_MANUAL_CONTACT_ROW,
     build_friendly_manual_tracking_column_values,
     build_friendly_manual_tracking_comment_text,
     build_manual_tracking_column_values,
     build_manual_tracking_comment_text,
     col_index_to_letter,
     find_next_comment_row,
+    find_next_friendly_tracking_column,
     find_next_tracking_column,
+    friendly_manual_tracking_values_by_row,
 )
 
 
@@ -34,8 +40,15 @@ def test_find_next_tracking_column_skips_filled():
 
 
 def test_find_next_tracking_column_friendly_starts_at_b():
-    row2 = ["Дата дзвінка"]  # тільки мітка в A
-    assert find_next_tracking_column(row2, FRIENDLY_MANUAL_TRACKING_FIRST_COL) == 2
+    row1 = ["Дата дзвінка"]  # тільки мітка в A
+    assert find_next_friendly_tracking_column(row1, ["ID"], FRIENDLY_MANUAL_TRACKING_FIRST_COL) == 2
+
+
+def test_find_next_friendly_tracking_column_skips_legacy_row2_data():
+    # Старі записи: рядок 1 порожній, дані з рядка 2 — колонку не перезаписувати.
+    row1 = ["Дата дзвінка", ""]
+    row2 = ["ID гравця", "14.09.2026"]
+    assert find_next_friendly_tracking_column(row1, row2, FRIENDLY_MANUAL_TRACKING_FIRST_COL) == 3
 
 
 def test_find_next_comment_row():
@@ -168,7 +181,43 @@ def test_build_friendly_manual_tracking_column_values():
         "5",
         "10",
     ]
-    assert len(values) == 12  # rows 2–13
+    assert len(values) == 12  # rows 1–12
+    assert FRIENDLY_MANUAL_TRACKING_DATA_START_ROW == 1
+    assert FRIENDLY_MANUAL_TRACKING_DATA_END_ROW == 12
+
+
+def test_friendly_contact_score_aligns_with_label_row():
+    call = {
+        "call_date": "14.09.2026",
+        "client_id": "9826120",
+        "ret_manager": "Звенігородська Наталія",
+        "check_date": "17.09.2026",
+    }
+    verdict = {"criteria": _sample_friendly_criteria()}
+    by_row = friendly_manual_tracking_values_by_row(call, verdict)
+    assert FRIENDLY_MANUAL_CONTACT_ROW == 5
+    assert by_row[FRIENDLY_MANUAL_CONTACT_ROW] == "5"
+    assert by_row[1] == "14.09.2026"
+    assert by_row[2] == "9826120"
+    assert by_row[3] == "Звенігородська Наталія"
+    # Не на рядок нижче від підпису «Встановлення контакту»
+    assert by_row.get(6) == "7.5"
+
+
+def test_short_contact_score_stays_on_row_5():
+    call = {
+        "call_date": "31.08.2026",
+        "client_id": "12345",
+        "ret_manager": "Сорока Анастасія",
+        "check_date": "09.09.2026",
+    }
+    verdict = {
+        "is_critical_fail": False,
+        "criteria": _sample_criteria(5, 7.5, 10, 2.5),
+    }
+    values = build_manual_tracking_column_values(call, verdict)
+    assert SHORT_MANUAL_CONTACT_ROW == 5
+    assert values[SHORT_MANUAL_CONTACT_ROW - 1] == "5"
 
 
 def test_build_friendly_manual_tracking_comment_text_uses_qa_note():

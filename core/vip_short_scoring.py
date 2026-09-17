@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field
 
 from core.vip_scoring_common import (
@@ -17,9 +19,59 @@ from core.vip_scoring_common import (
     score_prep,
 )
 
+logger = logging.getLogger(__name__)
+
 RUBRIC_VERSION = "v2_90sec"
 CALL_TYPE_KEY = "vip_short_90s"
 MAX_SCORE = 30.0
+
+# Градація «Робота зі зливом» за гайдом: 0 / 2,5 / 5 / 7,5 / 10.
+SLIP_HANDLING_ALLOWED_POINTS = (0.0, 2.5, 5.0, 7.5, 10.0)
+
+CRITICAL_SUPPRESSED_NO_QUOTE = (
+    "Критичний гейт не застосовано: немає цитати клієнта про бажання завершити розмову. "
+    "Потрібна ручна перевірка QA."
+)
+CRITICAL_SUPPRESSED_QUOTE_NOT_IN_TRANSCRIPT = (
+    "Критичний гейт не застосовано: цитата «зливу» не знайдена в транскрипті. "
+    "Потрібна ручна перевірка QA."
+)
+CRITICAL_SUPPRESSED_QUOTE_NOT_A_LEAK = (
+    "Критичний гейт не застосовано: цитата не показує бажання клієнта завершити розмову. "
+    "Потрібна ручна перевірка QA."
+)
+
+# Репліка клієнта має містити хоча б один сигнал «зливу» (бажання завершити / зайнятість / брак часу).
+_CLIENT_END_CALL_MARKERS = (
+    "не можу говор",
+    "не могу говор",
+    "не можу розмов",
+    "зайнят",
+    "занят",
+    "немає часу",
+    "нема часу",
+    "нет времени",
+    "передзвон",
+    "перезвон",
+    "не дзвон",
+    "не звон",
+    "не телефон",
+    "поспіша",
+    "спешу",
+    "не цікаво",
+    "не интересно",
+    "не хочу",
+    "незручно",
+    "неудобно",
+    "не зараз",
+    "не сейчас",
+    "пізніше",
+    "позже",
+    "не до розмов",
+    "за керм",
+    "на роботі",
+    "на работе",
+)
 
 
 class SlipHandlingFacts(BaseModel):
@@ -40,6 +92,8 @@ class SlipCriticalFacts(BaseModel):
     artificially_extended_call: bool = False
     delayed_ending_after_callback_agreed: bool = False
     ended_without_using_available_retention_options: bool = False
+    # Дослівна репліка клієнта з транскрипту, що підтверджує «злив».
+    critical_evidence_quote: str = ""
 
 
 class VipShort90sFactsBundle(BaseModel):
@@ -110,30 +164,83 @@ def score_slip_handling(f: SlipHandlingFacts, ctx: SharedCallContext) -> Criteri
     )
 
 
-def has_critical_slip_violation(f: SlipCriticalFacts) -> tuple[bool, list[str]]:
+def _normalize_for_quote_match(text: str) -> str:
+    return " ".join((text or "").split()).casefold()
+
+
+def evidence_quote_in_transcript(quote: str, transcript: str) -> bool:
+    """Проста перевірка: нормалізована цитата є підрядком транскрипту."""
+    q = _normalize_for_quote_match(quote)
+    if not q:
+        return False
+    return q in _normalize_for_quote_match(transcript)
+
+
+def quote_shows_client_wanted_to_end(quote: str) -> bool:
+    q = _normalize_for_quote_match(quote)
+    if not q:
+        return False
+    return any(marker in q for marker in _CLIENT_END_CALL_MARKERS)
+
+
+def has_critical_slip_violation(
+    f: SlipCriticalFacts,
+    transcript: str = "",
+) -> tuple[bool, list[str], list[str]]:
+    """Повертає (is_critical, reasons, review_flags).
+
+    Критичне обнулення лише якщо є прапорець І цитата «зливу» знайдена в транскрипті.
+    """
     flags = {
-        "Продовжив презентацію, хоча клієнт прямо сказав, що не може говорити": (
+        "Після прямої репліки клієнта, що не може говорити, менеджер продовжив презентацію": (
             f.continued_pitch_after_client_said_cannot_talk
         ),
-        "Продовжив продаж замість домовленості про інший контакт": (
+        "Після бажання клієнта завершити розмову менеджер продовжив продаж замість домовленості про інший контакт": (
             f.continued_pitch_instead_of_agreeing_callback
         ),
-        "Ставив питання, що не допомагають зберегти контакт": f.asked_irrelevant_questions,
-        "Штучно затягував дзвінок": f.artificially_extended_call,
-        "Затягував завершення після згоди клієнта на передзвін": (
+        "Після сигналу «зливу» менеджер ставив питання, що не допомагають зберегти контакт і не стосуються причини/передзвону": (
+            f.asked_irrelevant_questions
+        ),
+        "Після сигналу «зливу» менеджер штучно затягував дзвінок (продовжив продукт/бонуси без мети утримання)": (
+            f.artificially_extended_call
+        ),
+        "Клієнт уже погодив передзвін, але менеджер затягував завершення презентацією": (
             f.delayed_ending_after_callback_agreed
         ),
-        "Завершив дзвінок, не використавши доречні можливості утримання контакту": (
+        "Клієнт хотів завершити розмову і не відмовився від передзвону, але менеджер завершив дзвінок без спроби утримати контакт": (
             f.ended_without_using_available_retention_options
         ),
     }
     reasons = [label for label, val in flags.items() if val]
-    return (len(reasons) > 0, reasons)
+    if not reasons:
+        return False, [], []
+
+    quote = (f.critical_evidence_quote or "").strip()
+    if not quote:
+        logger.warning(
+            "VIP short critical flags set without evidence quote; gate suppressed. flags=%s",
+            reasons,
+        )
+        return False, [], [CRITICAL_SUPPRESSED_NO_QUOTE]
+    if not evidence_quote_in_transcript(quote, transcript):
+        logger.warning(
+            "VIP short critical evidence quote not found in transcript; gate suppressed. quote=%r",
+            quote[:200],
+        )
+        return False, [], [CRITICAL_SUPPRESSED_QUOTE_NOT_IN_TRANSCRIPT]
+    if not quote_shows_client_wanted_to_end(quote):
+        logger.warning(
+            "VIP short critical quote is not a client end-call signal; gate suppressed. quote=%r",
+            quote[:200],
+        )
+        return False, [], [CRITICAL_SUPPRESSED_QUOTE_NOT_A_LEAK]
+    return True, reasons, []
 
 
 def score_vip_short_90s(
     facts: VipShort90sFactsBundle,
     ctx: SharedCallContext | None = None,
+    dialogue: str = "",
 ) -> ScoringResult:
     ctx = ctx or SharedCallContext.from_facts(facts.shared_context.model_dump())
     contact = score_contact(facts.contact)
@@ -141,7 +248,10 @@ def score_vip_short_90s(
     prep = score_prep(facts.prep)
     closing = score_closing(facts.closing, ctx)
 
-    is_critical, critical_reasons = has_critical_slip_violation(facts.slip_critical)
+    is_critical, critical_reasons, review_flags = has_critical_slip_violation(
+        facts.slip_critical,
+        transcript=dialogue or "",
+    )
     criteria = [contact, slip, prep, closing]
     total = 0.0 if is_critical else sum(c.points for c in criteria)
     max_score = sum(c.max_points for c in criteria)
@@ -155,15 +265,16 @@ def score_vip_short_90s(
         critical_reasons=critical_reasons,
         criteria=criteria,
         rubric_version=RUBRIC_VERSION,
+        review_flags=review_flags,
     )
 
 
 def score_vip_short_call(facts: dict, call: dict | None = None, dialogue: str = "") -> dict:
     """Сумісний вхід для app_vip: dict фактів → dict результату для UI/логів."""
-    _ = (call, dialogue)
+    _ = call
     bundle = VipShort90sFactsBundle.model_validate(facts or {})
     ctx = SharedCallContext.from_facts(bundle.shared_context.model_dump())
-    return score_vip_short_90s(bundle, ctx).to_dict()
+    return score_vip_short_90s(bundle, ctx, dialogue=dialogue or "").to_dict()
 
 
 def build_perfect_short90s_facts() -> VipShort90sFactsBundle:

@@ -28,6 +28,9 @@ def _render_guide_items(items: list[dict]) -> None:
                 """,
                 unsafe_allow_html=True,
             )
+            if item.get("gradation"):
+                st.markdown("**Градація балів**")
+                st.markdown(str(item["gradation"]))
             if item.get("scale"):
                 st.markdown("**Шкала**")
                 st.markdown(str(item["scale"]))

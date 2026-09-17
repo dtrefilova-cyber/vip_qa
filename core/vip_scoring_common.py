@@ -45,6 +45,7 @@ class ScoringResult:
     critical_reasons: list[str]
     criteria: list[CriterionScore]
     rubric_version: str = ""
+    review_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -61,7 +62,7 @@ class ScoringResult:
             "verdict_reasons": list(self.critical_reasons)
             if self.is_critical_fail
             else [r for c in self.criteria for r in c.reasons],
-            "review_flags": [],
+            "review_flags": list(self.review_flags),
             "score_label": f"{self.total_score:g} / {self.max_score:g} ({self.percent}%)",
         }
 
@@ -144,6 +145,8 @@ _PREP_ORDER = [
     ObjectionHandling.RESOLVED_NO_CHECK,
     ObjectionHandling.RESOLVED_WITH_CHECK,
 ]
+# Градація P.R.E.P. за гайдом: 0 / 2,5 / 5 / 7,5 / 10 (formal = 2.5).
+PREP_ALLOWED_POINTS = (0.0, 2.5, 5.0, 7.5, 10.0)
 _PREP_POINTS = {
     ObjectionHandling.IGNORED: 0.0,
     ObjectionHandling.FORMAL: 2.5,
