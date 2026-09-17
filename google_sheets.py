@@ -349,7 +349,11 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
         row_data.get("comment", ""),
     ]
     try:
-        sheets_retry(worksheet.update, f"A{next_row}:G{next_row}", [values])
+        sheets_retry(
+            worksheet.update,
+            range_name=f"A{next_row}:G{next_row}",
+            values=[values],
+        )
     except Exception as e:
         return str(e)
 
@@ -377,8 +381,25 @@ MANUAL_TRACKING_CRITICAL_SUMMARY = "0/30"
 
 FRIENDLY_MANUAL_TRACKING_FIRST_COL = 2  # B (новий аркуш; якщо зайнята — далі)
 FRIENDLY_MANUAL_TRACKING_COMMENT_START_ROW = 15
-FRIENDLY_MANUAL_TRACKING_DATA_START_ROW = 2  # рядок 1 код не чіпає
-FRIENDLY_MANUAL_TRACKING_DATA_END_ROW = 13
+# Підписи в колонці A починаються з рядка 1 (Дата дзвінка). Раніше писали в 2–13 —
+# увесь блок їхав на 1 рядок нижче підписів.
+FRIENDLY_MANUAL_TRACKING_DATA_START_ROW = 1
+FRIENDLY_MANUAL_TRACKING_DATA_END_ROW = 12
+FRIENDLY_MANUAL_CONTACT_ROW = 5  # «Встановлення контакту»
+FRIENDLY_MANUAL_ROW_FIELDS = (
+    "call_date",  # 1
+    "client_id",  # 2
+    "manager",  # 3
+    "listen_date",  # 4
+    "contact",  # 5
+    "friendly_development",  # 6
+    "personal_approach",  # 7
+    "call_to_action",  # 8
+    "bonus_offer",  # 9
+    "prep",  # 10
+    "closing",  # 11
+    "ease",  # 12
+)
 FRIENDLY_MANUAL_CRITERION_KEYS = (
     "contact",
     "friendly_development",
@@ -389,6 +410,7 @@ FRIENDLY_MANUAL_CRITERION_KEYS = (
     "closing",
     "ease",
 )
+SHORT_MANUAL_CONTACT_ROW = 5
 
 
 def col_index_to_letter(col_index: int) -> str:
@@ -408,6 +430,25 @@ def find_next_tracking_column(row1_values: list, first_col: int = MANUAL_TRACKIN
     idx = max(first_col, 1) - 1
     values = list(row1_values or [])
     while idx < len(values) and str(values[idx] or "").strip():
+        idx += 1
+    return idx + 1
+
+
+def find_next_friendly_tracking_column(
+    row1_values: list,
+    row2_values: list | None = None,
+    first_col: int = FRIENDLY_MANUAL_TRACKING_FIRST_COL,
+) -> int:
+    """Перша вільна колонка Friendly: враховує і новий запис (рядок 1), і старий (рядок 2)."""
+    idx = max(first_col, 1) - 1
+    values1 = list(row1_values or [])
+    values2 = list(row2_values or [])
+    max_len = max(len(values1), len(values2), idx + 1)
+    while idx < max_len:
+        filled1 = idx < len(values1) and bool(str(values1[idx] or "").strip())
+        filled2 = idx < len(values2) and bool(str(values2[idx] or "").strip())
+        if not filled1 and not filled2:
+            return idx + 1
         idx += 1
     return idx + 1
 
@@ -513,9 +554,9 @@ def build_friendly_manual_tracking_column_values(
     *,
     listen_date: str = "",
 ) -> list[str]:
-    """12 значень для рядків 2–13 аркуша RESULTS FRIENDLY (рядок 1 не чіпаємо).
+    """12 значень для рядків 1–12 аркуша RESULTS FRIENDLY.
 
-    Критичне обнулення балів сюди НЕ переносимо (чекаємо узгодження з Дарʼєю).
+    Рядок 5 = «Встановлення контакту». Критичне обнулення балів сюди НЕ переносимо.
     """
     criteria = verdict_data.get("criteria") or []
     listen = listen_date or call.get("check_date") or call.get("listen_date") or ""
@@ -527,6 +568,20 @@ def build_friendly_manual_tracking_column_values(
         str(listen),
         *scores,
     ]
+
+
+def friendly_manual_tracking_values_by_row(
+    call: dict,
+    verdict_data: dict,
+    *,
+    listen_date: str = "",
+) -> dict[int, str]:
+    """Рядок Google Sheet (1-based) → значення. Для тестів вирівнювання з підписами A."""
+    values = build_friendly_manual_tracking_column_values(
+        call, verdict_data, listen_date=listen_date
+    )
+    start = FRIENDLY_MANUAL_TRACKING_DATA_START_ROW
+    return {start + i: values[i] for i in range(len(values))}
 
 
 def build_friendly_manual_tracking_comment_text(call: dict, verdict_data: dict) -> str:
@@ -576,7 +631,11 @@ def write_vip_short_manual_tracking(
     )
     range_main = f"{col_letter}1:{col_letter}9"
     try:
-        sheets_retry(worksheet.update, range_main, [[v] for v in column_values])
+        sheets_retry(
+            worksheet.update,
+            range_name=range_main,
+            values=[[v] for v in column_values],
+        )
     except Exception as e:
         return str(e)
 
@@ -589,8 +648,8 @@ def write_vip_short_manual_tracking(
     try:
         sheets_retry(
             worksheet.update,
-            f"A{comment_row}:B{comment_row}",
-            [[comment_text, str(call.get("client_id") or "")]],
+            range_name=f"A{comment_row}:B{comment_row}",
+            values=[[comment_text, str(call.get("client_id") or "")]],
         )
     except Exception as e:
         return str(e)
@@ -621,9 +680,12 @@ def write_vip_friendly_manual_tracking(
     workbook = google_client.open_by_key(sheet_id)
     worksheet = workbook.worksheet(ws_name)
 
-    # Маркер зайнятості — рядок 2 (дата дзвінка); рядок 1 код не заповнює
+    # Маркер зайнятості: рядок 1 (новий запис) і рядок 2 (старі колонки зі зсувом).
+    row1 = sheets_retry(worksheet.row_values, 1)
     row2 = sheets_retry(worksheet.row_values, 2)
-    col_idx = find_next_tracking_column(row2, FRIENDLY_MANUAL_TRACKING_FIRST_COL)
+    col_idx = find_next_friendly_tracking_column(
+        row1, row2, FRIENDLY_MANUAL_TRACKING_FIRST_COL
+    )
     col_letter = col_index_to_letter(col_idx)
 
     column_values = build_friendly_manual_tracking_column_values(
@@ -636,7 +698,11 @@ def write_vip_friendly_manual_tracking(
         f"{col_letter}{FRIENDLY_MANUAL_TRACKING_DATA_END_ROW}"
     )
     try:
-        sheets_retry(worksheet.update, range_main, [[v] for v in column_values])
+        sheets_retry(
+            worksheet.update,
+            range_name=range_main,
+            values=[[v] for v in column_values],
+        )
     except Exception as e:
         return str(e)
 
@@ -651,8 +717,8 @@ def write_vip_friendly_manual_tracking(
     try:
         sheets_retry(
             worksheet.update,
-            f"A{comment_row}:B{comment_row}",
-            [[comment_text, str(call.get("client_id") or "")]],
+            range_name=f"A{comment_row}:B{comment_row}",
+            values=[[comment_text, str(call.get("client_id") or "")]],
         )
     except Exception as e:
         return str(e)

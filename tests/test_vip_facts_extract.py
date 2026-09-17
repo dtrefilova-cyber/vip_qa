@@ -187,3 +187,61 @@ def test_short_prompt_requires_evidence_quote_and_2_5_scale():
     assert "critical_evidence_quote" in prompt
     assert "0 / 2,5 / 5 / 7,5 / 10" in prompt
     assert "formal=2.5" in prompt
+
+
+def test_extract_friendly_retries_invalid_schema_then_succeeds(monkeypatch):
+    from vip_short_ai_assistant import extract_vip_friendly_facts
+
+    monkeypatch.setattr("vip_short_ai_assistant.time.sleep", lambda _s: None)
+    bad = {
+        "prep": {
+            "objections_present": True,
+            "objections": [{"type": "no_desire", "handling": "not-a-real-level"}],
+        }
+    }
+    good = {"ease": {"level": "high", "signals": []}}
+    client = _FakeClient(
+        [
+            json.dumps({"facts": bad}, ensure_ascii=False),
+            json.dumps({"facts": good}, ensure_ascii=False),
+        ]
+    )
+    facts = extract_vip_friendly_facts(client, "model", "dialogue", "", "", 100)
+    assert facts["ease"]["level"] == "high"
+    assert client.chat.completions.calls == 2
+
+
+def test_extract_short_retries_invalid_schema_then_succeeds(monkeypatch):
+    from vip_short_ai_assistant import extract_vip_short_90s_facts
+
+    monkeypatch.setattr("vip_short_ai_assistant.time.sleep", lambda _s: None)
+    bad = {
+        "prep": {
+            "objections_present": True,
+            "objections": [{"type": "no_desire", "handling": "not-a-real-level"}],
+        }
+    }
+    good = {"contact": {"greeted": True}}
+    client = _FakeClient(
+        [
+            json.dumps({"facts": bad}, ensure_ascii=False),
+            json.dumps({"facts": good}, ensure_ascii=False),
+        ]
+    )
+    facts = extract_vip_short_90s_facts(client, "model", "dialogue", "", "", 100)
+    assert facts["contact"]["greeted"] is True
+    assert client.chat.completions.calls == 2
+
+
+def test_user_safe_analysis_error_is_specific():
+    from vip_short_ai_assistant import VipFactsExtractionError, user_safe_analysis_error
+
+    assert "VIP Friendly" in user_safe_analysis_error(
+        VipFactsExtractionError("Не вдалося розібрати факти VIP Friendly. Спробуйте ще раз.")
+    )
+    assert "таймаут" in user_safe_analysis_error(TimeoutError("read timed out")).lower()
+    assert "аудіо" in user_safe_analysis_error(RuntimeError("Deepgram PAYLOAD_ERROR")).lower()
+    assert "AI" in user_safe_analysis_error(RuntimeError("OpenAI 429 rate limit"))
+    generic = user_safe_analysis_error(RuntimeError("boom"))
+    assert "технічну помилку" in generic
+    assert "повідомте розробника" in generic.lower()

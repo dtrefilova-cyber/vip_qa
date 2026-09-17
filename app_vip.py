@@ -57,9 +57,9 @@ from vip_archive import clear_vip_day_cache, render_archive_section, render_call
 from vip_short_ai_assistant import (
     VIP_FRIENDLY_FACTS_CACHE_TAG,
     VIP_SHORT_FACTS_CACHE_TAG,
-    VipFactsExtractionError,
     extract_vip_friendly_facts,
     extract_vip_short_90s_facts,
+    user_safe_analysis_error,
 )
 
 
@@ -232,22 +232,7 @@ def _write_manual_tracking_safe(call, verdict_data) -> bool:
 
 def _user_safe_analysis_error(exc: BaseException) -> str:
     """Коротке повідомлення для QA без сирих stack/secret деталей."""
-    if isinstance(exc, VipFactsExtractionError):
-        return str(exc)
-    msg = str(exc or "").lower()
-    name = type(exc).__name__.lower()
-    if "streamlit" in name or "cannot be called" in msg or "cached" in msg:
-        return (
-            "Тимчасова помилка інтерфейсу під час аналізу. "
-            "Оновіть сторінку і спробуйте ще раз."
-        )
-    if "timeout" in msg or "timed out" in msg:
-        return "Аналіз перевищив час очікування. Спробуйте ще раз."
-    if "openai" in msg or "rate limit" in msg or "429" in msg:
-        return "Помилка AI-моделі. Спробуйте ще раз за хвилину."
-    if "validation" in msg or "pydantic" in msg:
-        return "Не вдалося розібрати результат аналізу. Спробуйте ще раз."
-    return "Аналіз не завершився. Повідомте розробника."
+    return user_safe_analysis_error(exc)
 
 
 def _analyze_single_call(i, call, results_state, spinner_label=None):
@@ -348,7 +333,13 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
             }
             return True
     except Exception as exc:
-        logger.exception("VIP analysis failed")
+        logger.exception(
+            "VIP analysis failed card=%s client_id=%s call_type=%s err_type=%s",
+            i + 1,
+            call.get("client_id", ""),
+            call.get("vip_call_type", ""),
+            type(exc).__name__,
+        )
         store_analysis_failure(
             results_state,
             i,
@@ -422,20 +413,36 @@ def _process_pending(
     st.session_state[keys["pending"]] = pending
     results_key = f"results_{call_type}"
     results_state = init_call_results_state(results_key)
-    call = pop_queued_call(call_type, card_id)
-    if not call:
-        call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
-    if check_date is not None:
-        call["check_date"] = format_check_date(check_date)
-    results_state.pop(card_id - 1, None)
-    current, total = pending_progress(call_type)
-    spinner = (
-        f"Аналіз VIP-дзвінка {card_id} ({current} з {total})..."
-        if total > 1
-        else f"Аналіз VIP-дзвінка {card_id}..."
-    )
-    ok = _analyze_single_call(card_id - 1, call, results_state, spinner_label=spinner)
-    _record_batch_progress(call_type, card_id, ok)
+    try:
+        call = pop_queued_call(call_type, card_id)
+        if not call:
+            call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+        if check_date is not None:
+            call["check_date"] = format_check_date(check_date)
+        results_state.pop(card_id - 1, None)
+        current, total = pending_progress(call_type)
+        spinner = (
+            f"Аналіз VIP-дзвінка {card_id} ({current} з {total})..."
+            if total > 1
+            else f"Аналіз VIP-дзвінка {card_id}..."
+        )
+        ok = _analyze_single_call(card_id - 1, call, results_state, spinner_label=spinner)
+        _record_batch_progress(call_type, card_id, ok)
+    except Exception as exc:
+        logger.exception(
+            "VIP queue card failed card=%s type=%s remaining=%s err_type=%s",
+            card_id,
+            call_type,
+            len(st.session_state.get(keys["pending"]) or []),
+            type(exc).__name__,
+        )
+        store_analysis_failure(
+            results_state,
+            card_id - 1,
+            _user_safe_analysis_error(exc),
+            client_id="",
+        )
+        _record_batch_progress(call_type, card_id, False)
 
 
 def _render_call_type_tab(
@@ -453,7 +460,6 @@ def _render_call_type_tab(
     results_key = f"results_{call_type}"
     init_call_results_state(results_key)
     pending = st.session_state.get(keys["pending"]) or []
-    analyzing = bool(pending)
     processed = False
 
     if pending:
@@ -461,14 +467,20 @@ def _render_call_type_tab(
             _process_pending(call_type, qa_manager, managers_config, check_date=check_date)
             processed = True
         except Exception as exc:
-            st.session_state[keys["pending"]] = []
-            st.session_state[keys["queued"]] = {}
-            set_analysis_run_summary(
-                "Не вдалося запустити аналіз VIP-дзвінка. Повідомте розробника.",
-                level="error",
+            logger.exception(
+                "VIP pending queue failed type=%s remaining=%s err_type=%s",
+                call_type,
+                len(st.session_state.get(keys["pending"]) or []),
+                type(exc).__name__,
             )
-            logger.exception("VIP pending queue failed: %s", exc)
-            st.error("Не вдалося запустити аналіз VIP-дзвінка. Повідомте розробника.")
+            set_analysis_run_summary(
+                "Дзвінок не проаналізовано. Наступні в черзі продовжаться автоматично.",
+                level="warning",
+            )
+            processed = True
+
+    # Після обробки картки кнопки блокуємо лише якщо черга ще не порожня.
+    analyzing = bool(st.session_state.get(keys["pending"]) or [])
 
     render_call_type_stats(call_type, slug, check_date)
     render_analysis_run_summary()

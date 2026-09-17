@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.vip_scoring_common import (
     ClosingFacts,
@@ -18,6 +19,8 @@ from core.vip_scoring_common import (
     score_contact,
     score_prep,
 )
+
+logger = logging.getLogger(__name__)
 
 RUBRIC_VERSION = "v1_friendly_ease10"
 CALL_TYPE_KEY = "vip_friendly"
@@ -69,6 +72,26 @@ class EaseLevel(str, Enum):
 class EaseFacts(BaseModel):
     level: EaseLevel = EaseLevel.CRITICAL
     signals: list[str] = Field(default_factory=list)
+
+    @field_validator("level", mode="before")
+    @classmethod
+    def _coerce_ease_level(cls, value):
+        if isinstance(value, EaseLevel):
+            return value
+        raw = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+        aliases = {
+            "high": EaseLevel.HIGH,
+            "noticeable_gaps": EaseLevel.NOTICEABLE_GAPS,
+            "noticeable": EaseLevel.NOTICEABLE_GAPS,
+            "medium": EaseLevel.NOTICEABLE_GAPS,
+            "mid": EaseLevel.NOTICEABLE_GAPS,
+            "low": EaseLevel.LOW,
+            "critical": EaseLevel.CRITICAL,
+        }
+        if raw in aliases:
+            return aliases[raw]
+        logger.warning("Unknown ease.level %r; defaulting to noticeable_gaps", value)
+        return EaseLevel.NOTICEABLE_GAPS
 
 
 class VipFriendlyFactsBundle(BaseModel):

@@ -205,6 +205,14 @@ def test_ease_high_is_10():
     assert score_ease(EaseFacts(level=EaseLevel.HIGH, signals=[])).max_points == 10.0
 
 
+def test_ease_unknown_level_does_not_break_scoring():
+    from core.vip_friendly_scoring import EaseFacts, score_ease
+
+    facts = EaseFacts.model_validate({"level": "medium", "signals": []})
+    assert facts.level.value == "noticeable_gaps"
+    assert score_ease(facts).points == 5.0
+
+
 def test_vip_short_90s_max_score_is_30():
     result = score_vip_short_90s(build_perfect_short90s_facts(), SharedCallContext())
     assert result.max_score == 30.0
