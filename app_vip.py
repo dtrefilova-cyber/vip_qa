@@ -162,6 +162,9 @@ def render_score_badge(verdict_data: dict) -> None:
         for reason in item.get("reasons") or []:
             st.caption(f"— {reason}")
 
+    for flag in verdict_data.get("review_flags") or []:
+        st.warning(str(flag))
+
     # Neutral UX only — never surface raw exception / secret details
     if verdict_data.get("supabase_write_failed"):
         st.warning("Результат оцінено, але не залогований у Supabase. Повідомте розробника.")

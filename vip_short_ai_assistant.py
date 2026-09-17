@@ -15,7 +15,7 @@ from prompts_vip_short import get_vip_short_90s_analysis_prompt
 
 logger = logging.getLogger(__name__)
 
-VIP_SHORT_FACTS_CACHE_TAG = "vip_short90s_r1_20260831"
+VIP_SHORT_FACTS_CACHE_TAG = "vip_short90s_r2_20260917"
 VIP_FRIENDLY_FACTS_CACHE_TAG = "vip_friendly_r1_20260831"
 
 
