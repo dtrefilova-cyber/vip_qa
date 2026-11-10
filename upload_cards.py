@@ -137,6 +137,19 @@ def collect_card_call(
     project = str(st.session_state.get(_fk(slug, "project", card_id)) or manager_meta.get("project") or "").strip()
     betking_x2 = project.lower() == "betking"
     selected_type = CALL_TYPE_FRIENDLY if call_type == CALL_TYPE_FRIENDLY else CALL_TYPE_SHORT_90S
+    important_note = str(st.session_state.get(_fk(slug, "important", card_id)) or "").strip()
+    qa_comment = str(st.session_state.get(_fk(slug, "comment", card_id)) or "").strip()
+    number_signed = bool(st.session_state.get(_fk(slug, "number_signed", card_id)))
+    client_is_military = bool(st.session_state.get(_fk(slug, "military", card_id)))
+    tech_followup = bool(st.session_state.get(_fk(slug, "tech_followup", card_id)))
+    # Текст «Важливе» / коментар також може містити прапорці (як у порталі)
+    try:
+        from core.vip_short_scoring import note_says_military, note_says_number_signed
+
+        number_signed = number_signed or note_says_number_signed(important_note, qa_comment)
+        client_is_military = client_is_military or note_says_military(important_note, qa_comment)
+    except Exception:
+        pass
     return {
         "url": normalize_audio_url(str(st.session_state.get(_url_key(call_type, card_id)) or "")),
         "ret_manager": ret_manager,
@@ -145,12 +158,14 @@ def collect_card_call(
         "client_id": str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip(),
         "call_date": call_date,
         "bonus_status": str(st.session_state.get(_fk(slug, "bonus", card_id)) or "").strip(),
-        "qa_comment": str(st.session_state.get(_fk(slug, "comment", card_id)) or "").strip(),
-        "important_note": str(st.session_state.get(_fk(slug, "important", card_id)) or "").strip(),
+        "qa_comment": qa_comment,
+        "important_note": important_note,
         "previous_call_not_service": bool(st.session_state.get(_fk(slug, "prev_not_service", card_id))),
         "has_tl_permission": bool(st.session_state.get(_fk(slug, "tl_perm", card_id))),
         "vip_call_type": selected_type,
-        "client_is_military": False,
+        "number_signed": number_signed,
+        "client_is_military": client_is_military,
+        "tech_followup": tech_followup if selected_type == CALL_TYPE_FRIENDLY else False,
         "betking_x2_applicable": betking_x2,
         "qa_manager": qa_manager,
     }
@@ -476,6 +491,22 @@ def render_vip_card(
             key=_fk(slug, "tl_perm", card_id),
             disabled=analyzing,
         )
+        st.checkbox(
+            "Підписаний номер",
+            key=_fk(slug, "number_signed", card_id),
+            disabled=analyzing,
+        )
+        st.checkbox(
+            "Клієнт військовий",
+            key=_fk(slug, "military", card_id),
+            disabled=analyzing,
+        )
+        if call_type == CALL_TYPE_FRIENDLY:
+            st.checkbox(
+                "Технічне питання / продовження розмови",
+                key=_fk(slug, "tech_followup", card_id),
+                disabled=analyzing,
+            )
 
         invalid = required_errors(call_type, card_id, projects_list)
         if errors:

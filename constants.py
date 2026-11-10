@@ -53,9 +53,9 @@ CALL_TYPE_LABELS = {
 
 CALL_TYPE_MAX_SCORE = {
     CALL_TYPE_KEY_SHORT: 30.0,
-    CALL_TYPE_KEY_FRIENDLY: 60.0,
+    CALL_TYPE_KEY_FRIENDLY: 57.5,
     CALL_TYPE_SHORT_90S: 30.0,
-    CALL_TYPE_FRIENDLY: 60.0,
+    CALL_TYPE_FRIENDLY: 57.5,
 }
 
 # UI slug для session_state / кешу карток (окремо на сторінку)
@@ -66,7 +66,7 @@ PAGE_SLUGS = {
     CALL_TYPE_KEY_FRIENDLY: "friendly",
 }
 
-# Поля картки — однакові для обох типів (інформаційні; на бал не впливають, окрім контексту Friendly)
+# Поля картки — спільні + контекст скорингу (військовий / підписаний / tech_followup)
 CARD_FIELDS_BY_TYPE = {
     CALL_TYPE_KEY_SHORT: [
         "url",
@@ -79,6 +79,8 @@ CARD_FIELDS_BY_TYPE = {
         "qa_comment",
         "previous_call_not_service",
         "has_tl_permission",
+        "number_signed",
+        "client_is_military",
     ],
     CALL_TYPE_KEY_FRIENDLY: [
         "url",
@@ -91,6 +93,9 @@ CARD_FIELDS_BY_TYPE = {
         "qa_comment",
         "previous_call_not_service",
         "has_tl_permission",
+        "number_signed",
+        "client_is_military",
+        "tech_followup",
     ],
 }
 

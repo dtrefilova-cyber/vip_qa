@@ -94,7 +94,7 @@ def _sample_friendly_criteria():
         {"key": "bonus_offer", "points": 5, "max_points": 5, "reasons": []},
         {"key": "prep", "points": 10, "max_points": 10, "reasons": []},
         {"key": "closing", "points": 5, "max_points": 5, "reasons": []},
-        {"key": "ease", "points": 10, "max_points": 10, "reasons": []},
+        {"key": "ease", "points": 7.5, "max_points": 7.5, "reasons": []},
     ]
 
 
@@ -179,7 +179,7 @@ def test_build_friendly_manual_tracking_column_values():
         "5",
         "10",
         "5",
-        "10",
+        "7.5",
     ]
     assert len(values) == 12  # rows 1–12
     assert FRIENDLY_MANUAL_TRACKING_DATA_START_ROW == 1

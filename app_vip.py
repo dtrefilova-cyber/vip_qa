@@ -71,10 +71,30 @@ def _facts_cache_key(tag, dialogue, qa_comment, important_note, cache_version, e
 
 
 @st.cache_data(ttl=172800, show_spinner=False)
-def analyze_vip_short_90s_cached(url, call_date, dialogue, qa_comment, important_note, cache_version):
+def analyze_vip_short_90s_cached(
+    url,
+    call_date,
+    dialogue,
+    qa_comment,
+    important_note,
+    cache_version,
+    number_signed=False,
+    client_is_military=False,
+    manager_name="",
+    project="",
+):
     _ = (url, call_date)
+    extra = (
+        f"signed={bool(number_signed)}|mil={bool(client_is_military)}"
+        f"|mgr={manager_name}|proj={project}"
+    )
     cache_key = _facts_cache_key(
-        VIP_SHORT_FACTS_CACHE_TAG, dialogue, qa_comment, important_note, cache_version
+        VIP_SHORT_FACTS_CACHE_TAG,
+        dialogue,
+        qa_comment,
+        important_note,
+        cache_version,
+        extra,
     )
     persisted = _load_persisted_cleaned_transcript(cache_key)
     if persisted is not None:
@@ -89,6 +109,11 @@ def analyze_vip_short_90s_cached(url, call_date, dialogue, qa_comment, important
         qa_comment,
         important_note,
         OPENAI_MAX_OUTPUT_TOKENS,
+        manager_name=str(manager_name or ""),
+        project=str(project or ""),
+        number_signed=bool(number_signed),
+        client_is_military=bool(client_is_military),
+        dialogue_for_context=dialogue,
     )
     try:
         _save_persisted_cleaned_transcript(cache_key, _json.dumps(facts, ensure_ascii=False))
@@ -278,6 +303,7 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                     bool(call.get("client_is_military")),
                     bool(call.get("betking_x2_applicable")),
                 )
+                # Портал: dialogue = cleaned transcript для цитат/grounding
                 verdict_data = score_vip_friendly_call(facts, call, transcript)
             else:
                 facts = analyze_vip_short_90s_cached(
@@ -287,8 +313,18 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                     call.get("qa_comment", ""),
                     call.get("important_note", ""),
                     ANALYSIS_CACHE_VERSION,
+                    bool(call.get("number_signed")),
+                    bool(call.get("client_is_military")),
+                    str(call.get("ret_manager") or ""),
+                    str(call.get("project") or ""),
                 )
-                verdict_data = score_vip_short_call(facts, call, transcript)
+                # dialogue = timed cleaned; source_text = raw timed (для edge flags)
+                verdict_data = score_vip_short_call(
+                    facts,
+                    call,
+                    timed_for_gpt,
+                    str(timed_transcript or raw_transcript or ""),
+                )
 
             # Isolate each sink so one failure does not block the others
             supabase_ok = False
