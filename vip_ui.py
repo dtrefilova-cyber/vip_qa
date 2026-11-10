@@ -11,12 +11,15 @@ from chrome import setup_page
 from constants import (
     CALL_TYPE_FRIENDLY,
     CALL_TYPE_SHORT_90S,
+    VIP_JOURNAL_MANAGERS_WORKSHEET,
+    VIP_JOURNAL_SHEET_ID,
     VIP_MANAGERS_SHEET_ID,
     VIP_MANAGERS_WORKSHEET,
 )
 from google_sheets import connect_google, load_vip_short_managers
 from presence import start_presence_heartbeat
 from utils import transcribe_audio_cached
+from vip_journal_sheets import load_journal_managers
 
 CALL_PAGE_META = {
     CALL_TYPE_SHORT_90S: {
@@ -35,10 +38,19 @@ CALL_PAGE_META = {
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def load_vip_managers_cached(spreadsheet_id: str = VIP_MANAGERS_SHEET_ID):
+def load_vip_managers_cached(spreadsheet_id: str = VIP_JOURNAL_SHEET_ID):
+    """Спочатку довідник «Менеджери VIP» журналу; fallback — legacy MANAGERS."""
     try:
         gclient = connect_google()
-        return load_vip_short_managers(gclient, spreadsheet_id, VIP_MANAGERS_WORKSHEET)
+        try:
+            rows = load_journal_managers(gclient, spreadsheet_id or VIP_JOURNAL_SHEET_ID)
+            if rows:
+                return rows
+        except Exception:
+            pass
+        return load_vip_short_managers(
+            gclient, VIP_MANAGERS_SHEET_ID, VIP_MANAGERS_WORKSHEET
+        )
     except Exception as e:
         st.error(f"Не вдалось завантажити менеджерів VIP: {e}")
         return []
@@ -49,8 +61,8 @@ def load_managers_context() -> tuple[list, list[str], dict]:
     projects_list = sorted({item.get("project") for item in managers_config if item.get("project")})
     if not managers_config:
         st.warning(
-            "Список VIP-менеджерів не завантажився з таблиці MANAGERS. "
-            "Перевірте, що аркуш заповнений і доступ надано сервісному акаунту."
+            f"Список VIP-менеджерів не завантажився з «{VIP_JOURNAL_MANAGERS_WORKSHEET}». "
+            "Перевірте аркуш і доступ сервісного акаунту до журналу."
         )
     return managers_config, projects_list, {}
 

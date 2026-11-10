@@ -135,7 +135,7 @@ def collect_card_call(
     call_date_raw = st.session_state.get(_date_key(call_type, card_id))
     call_date = call_date_raw.strftime("%d.%m.%Y") if call_date_raw else ""
     project = str(st.session_state.get(_fk(slug, "project", card_id)) or manager_meta.get("project") or "").strip()
-    betking_x2 = project.lower() == "betking"
+    betking_x2 = project.lower().replace(" ", "") in {"betking", "беткінг", "беткинг"}
     selected_type = CALL_TYPE_FRIENDLY if call_type == CALL_TYPE_FRIENDLY else CALL_TYPE_SHORT_90S
     important_note = str(st.session_state.get(_fk(slug, "important", card_id)) or "").strip()
     qa_comment = str(st.session_state.get(_fk(slug, "comment", card_id)) or "").strip()
@@ -155,6 +155,7 @@ def collect_card_call(
         "ret_manager": ret_manager,
         "project": project,
         "tl": manager_meta.get("tl", ""),
+        "manager_login": str(manager_meta.get("login") or "").strip(),
         "client_id": str(st.session_state.get(_fk(slug, "client", card_id)) or "").strip(),
         "call_date": call_date,
         "bonus_status": str(st.session_state.get(_fk(slug, "bonus", card_id)) or "").strip(),

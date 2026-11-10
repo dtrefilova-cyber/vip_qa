@@ -16,10 +16,9 @@ from google_sheets import (
     append_vip_short_result,
     connect_google,
     format_vip_score_comment_for_sheet,
-    write_vip_friendly_manual_tracking,
-    write_vip_short_manual_tracking,
 )
 from supabase_logger import log_vip_short_call_to_supabase
+from vip_journal_sheets import make_analysis_id, resolve_journal_call_type, write_vip_journal_result
 from upload_cards import (
     GRID_COLUMNS,
     _keys,
@@ -195,9 +194,14 @@ def render_score_badge(verdict_data: dict) -> None:
         st.warning("Результат оцінено, але не залогований у Supabase. Повідомте розробника.")
     if verdict_data.get("sheet_write_failed"):
         st.warning("Результат оцінено, але не записаний у RESULTS. Повідомте розробника.")
-    if verdict_data.get("manual_tracking_write_failed"):
+    journal_status = str(verdict_data.get("journal_status") or "").strip()
+    if verdict_data.get("journal_write_ok"):
+        st.success(journal_status or "Записано")
+    elif verdict_data.get("journal_write_failed"):
+        err = str(verdict_data.get("journal_write_error") or "").strip()
         st.warning(
-            "Результат оцінено, але не записаний у ручну трекінг-таблицю. Повідомте розробника."
+            "Результат оцінено, але не записаний у журнал проєкту."
+            + (f" {err}" if err else " Повідомте розробника.")
         )
     if verdict_data.get("analysis_error"):
         st.error("Аналіз не завершився. Повідомте розробника.")
@@ -237,22 +241,17 @@ def _write_result_to_sheet(call, verdict_data) -> bool:
         return False
 
 
-def _write_manual_tracking_safe(call, verdict_data) -> bool:
-    """Некритичний запис у ручну трекінг-таблицю (короткі → RESULTS, Friendly → RESULTS FRIENDLY)."""
+def _write_journal_safe(call, verdict_data) -> dict:
+    """Запис у журнал Betking/777/Vegas (A:L або N:AC). Повертає статус write_vip_journal_result."""
     try:
         gclient = connect_google()
-        selected = str(call.get("vip_call_type") or CALL_TYPE_SHORT_90S)
-        if selected == CALL_TYPE_FRIENDLY:
-            res = write_vip_friendly_manual_tracking(gclient, call, verdict_data)
-        else:
-            res = write_vip_short_manual_tracking(gclient, call, verdict_data)
-        if res is not True:
-            logger.error("Manual tracking sheet write returned non-True: %s", res)
-            return False
-        return True
-    except Exception:
-        logger.exception("Manual tracking sheet write failed")
-        return False
+        result = write_vip_journal_result(gclient, call, verdict_data)
+        if not result.get("ok"):
+            logger.error("VIP journal write failed: %s", result.get("error"))
+        return result
+    except Exception as exc:
+        logger.exception("VIP journal write failed")
+        return {"ok": False, "error": str(exc), "status": "Помилка запису"}
 
 
 def _user_safe_analysis_error(exc: BaseException) -> str:
@@ -292,6 +291,12 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
             )
 
             selected = str(call.get("vip_call_type") or CALL_TYPE_SHORT_90S)
+            journal_type = resolve_journal_call_type(selected) or (
+                "friendly" if selected == CALL_TYPE_FRIENDLY else "short"
+            )
+            call["journal_call_type"] = journal_type
+            call["analysis_id"] = make_analysis_id(call, journal_type)
+
             if selected == CALL_TYPE_FRIENDLY:
                 facts = analyze_vip_friendly_cached(
                     call.get("url", ""),
@@ -326,6 +331,9 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                     str(timed_transcript or raw_transcript or ""),
                 )
 
+            # Критична помилка: ознака/обґрунтування в verdict; критерії не обнуляємо для журналу.
+            verdict_data["analysis_id"] = call["analysis_id"]
+
             # Isolate each sink so one failure does not block the others
             supabase_ok = False
             try:
@@ -349,19 +357,24 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
             except Exception:
                 logger.exception("Sheets RESULTS write failed")
 
-            manual_ok = True
+            journal_result = {"ok": False, "status": "Помилка запису"}
             try:
-                manual_ok = _write_manual_tracking_safe(call, verdict_data)
+                journal_result = _write_journal_safe(call, verdict_data)
             except Exception:
-                logger.exception("Manual tracking sheet write failed")
-                manual_ok = False
+                logger.exception("VIP journal write failed")
+                journal_result = {"ok": False, "error": "exception", "status": "Помилка запису"}
 
             results_state[i] = {
                 "verdict_data": {
                     **verdict_data,
                     "supabase_write_failed": not supabase_ok,
                     "sheet_write_failed": not sheet_ok,
-                    "manual_tracking_write_failed": not manual_ok,
+                    "journal_write_ok": bool(journal_result.get("ok")),
+                    "journal_write_failed": not bool(journal_result.get("ok")),
+                    "journal_status": journal_result.get("status") or "",
+                    "journal_write_error": journal_result.get("error") or "",
+                    "journal_row": journal_result.get("row"),
+                    "journal_sheet": journal_result.get("sheet_title"),
                 },
                 "facts": facts,
                 "analysis_done": True,

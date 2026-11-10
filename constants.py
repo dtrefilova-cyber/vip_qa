@@ -27,12 +27,37 @@ FORBIDDEN_WORDS = [
 # Операційна таблиця VIP: аркуш RESULTS (бальні записи)
 VIP_SHORT_SHEET_ID = "1ww7dFbI8Gw7Ji96ssgSKBtlvv739xrAL9bNTfCiWqOc"
 
-# Довідник менеджерів (аркуш MANAGERS) + ручна колонкова трекінг-таблиця
+# Довідник менеджерів (аркуш MANAGERS) + legacy колонкова трекінг-таблиця
 VIP_SHORT_MANUAL_TRACKING_SHEET_ID = "1sse7mivevTjwn5PE8o1Nwb26_9PTKXeFrrrTygCL2x0"
 VIP_SHORT_MANUAL_TRACKING_WORKSHEET = "RESULTS"
 VIP_FRIENDLY_MANUAL_TRACKING_WORKSHEET = "RESULTS FRIENDLY"
 VIP_MANAGERS_SHEET_ID = VIP_SHORT_MANUAL_TRACKING_SHEET_ID
 VIP_MANAGERS_WORKSHEET = "MANAGERS"
+
+# Журнал оцінок за проєктом (Betking / 777 / Vegas): короткі A:L, френдлі N:AC
+VIP_JOURNAL_SHEET_ID = "1-9M9Z4qcZ-5fikWWm-QGBTvjdjwjXnDZjmG4DIHT7Wk"
+VIP_JOURNAL_MANAGERS_WORKSHEET = "Менеджери VIP"
+VIP_JOURNAL_REVIEWER = "АІ"
+VIP_JOURNAL_TZ = "Europe/Kiev"
+VIP_JOURNAL_CALL_TYPE_SHORT = "short"
+VIP_JOURNAL_CALL_TYPE_FRIENDLY = "friendly"
+VIP_JOURNAL_PROJECTS = {
+    "betking": {
+        "title": "Betking",
+        "sheet_id": 445201819,
+        "start_row": 3,
+    },
+    "777": {
+        "title": "777",
+        "sheet_id": 1229042759,
+        "start_row": 3,
+    },
+    "vegas": {
+        "title": "Vegas",
+        "sheet_id": 1070088770,
+        "start_row": 5,
+    },
+}
 
 CALL_TYPE_SHORT_90S = "Короткий 90 сек"
 CALL_TYPE_FRIENDLY = "VIP Friendly (2-й дзвінок)"
