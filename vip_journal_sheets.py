@@ -314,10 +314,12 @@ def find_next_journal_row(
     return idx + 1
 
 
-def build_journal_qa_comment(call: dict, verdict_data: dict | None = None) -> str:
-    """Коментар у K/AB: текст з картки («Коментар до дзвінка»), без AI-пояснень."""
-    _ = verdict_data
-    return str(call.get("qa_comment") or "").strip()
+def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None = None) -> str:
+    """Коментар у K/AB: розбір результатів аналізу (критерії + конкретні причини), не ручне поле картки."""
+    _ = call
+    from google_sheets import format_vip_score_comment_for_sheet
+
+    return str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
 
 
 def build_short_row_payload(
@@ -331,7 +333,7 @@ def build_short_row_payload(
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки короткого блоку без I (формула). K — коментар з картки."""
+    """Клітинки короткого блоку без I (формула). K — коментар по результатах аналізу."""
     payload = {
         "A": _as_text_id(client_id),
         "B": _as_sheet_date(call_date),
@@ -361,7 +363,7 @@ def build_friendly_row_payload(
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки френдлі блоку без Z (формула). AB — коментар з картки."""
+    """Клітинки френдлі блоку без Z (формула). AB — коментар по результатах аналізу."""
     payload = {
         "N": _as_text_id(client_id),
         "O": _as_sheet_date(call_date),

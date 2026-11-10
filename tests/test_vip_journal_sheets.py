@@ -105,7 +105,27 @@ def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
     assert sum(v for v in scores.values()) == 57.5
 
 
-def test_short_payload_skips_formula_writes_card_comment():
+def test_journal_comment_uses_score_results_not_manual_card_note():
+    from vip_journal_sheets import build_journal_qa_comment
+
+    verdict = {
+        "criteria": [
+            {
+                "key": "contact",
+                "label": "Встановлення контакту",
+                "points": 2.5,
+                "max_points": 5,
+                "reasons": ["Відсутній елемент привітання: ім'я клієнта"],
+            }
+        ]
+    }
+    comment = build_journal_qa_comment({"qa_comment": "ручний текст з картки"}, verdict)
+    assert "ручний текст з картки" not in comment
+    assert "ім'я клієнта" in comment
+    assert "Встановлення контакту" in comment
+
+
+def test_short_payload_skips_formula_writes_result_comment():
     from datetime import date
 
     scores = {"contact": 5.0, "slip_handling": 10.0, "prep": 10.0, "closing": 5.0}
@@ -116,15 +136,15 @@ def test_short_payload_skips_formula_writes_card_comment():
         tl="TL",
         scores=scores,
         check_date=date(2026, 9, 2),
-        qa_comment="клієнт просив передзвін",
+        qa_comment="— Встановлення контакту: 2.5/5 (Відсутній елемент привітання: ім'я клієнта)",
     )
     assert "I" not in payload
-    assert payload["K"] == "клієнт просив передзвін"
+    assert "ім'я клієнта" in payload["K"]
     assert payload["J"] == "АІ"
     assert sum(v for v in scores.values()) == 30.0
 
 
-def test_friendly_payload_writes_comment_to_ab():
+def test_friendly_payload_writes_result_comment_to_ab():
     from datetime import date
 
     scores = {
@@ -144,10 +164,10 @@ def test_friendly_payload_writes_comment_to_ab():
         tl="Т",
         scores=scores,
         check_date=date(2026, 9, 2),
-        qa_comment="тон ок",
+        qa_comment="— Завершення: 2.5/5 (Відсутній елемент завершення: прощання)",
     )
     assert "Z" not in payload
-    assert payload["AB"] == "тон ок"
+    assert "прощання" in payload["AB"]
 
 
 def test_find_next_row_ignores_prefilled_below_gap():
