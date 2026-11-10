@@ -314,6 +314,12 @@ def find_next_journal_row(
     return idx + 1
 
 
+def build_journal_qa_comment(call: dict, verdict_data: dict | None = None) -> str:
+    """Коментар у K/AB: текст з картки («Коментар до дзвінка»), без AI-пояснень."""
+    _ = verdict_data
+    return str(call.get("qa_comment") or "").strip()
+
+
 def build_short_row_payload(
     *,
     client_id: str,
@@ -323,9 +329,10 @@ def build_short_row_payload(
     scores: dict[str, float | None],
     check_date: date | None,
     reviewer: str = VIP_JOURNAL_REVIEWER,
+    qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки короткого блоку без I (формула) і K (ручний QA)."""
-    return {
+    """Клітинки короткого блоку без I (формула). K — коментар з картки."""
+    payload = {
         "A": _as_text_id(client_id),
         "B": _as_sheet_date(call_date),
         "C": manager,
@@ -337,6 +344,10 @@ def build_short_row_payload(
         "J": reviewer,
         "L": _as_sheet_date(check_date),
     }
+    comment = str(qa_comment or "").strip()
+    if comment:
+        payload["K"] = comment
+    return payload
 
 
 def build_friendly_row_payload(
@@ -348,9 +359,10 @@ def build_friendly_row_payload(
     scores: dict[str, float | None],
     check_date: date | None,
     reviewer: str = VIP_JOURNAL_REVIEWER,
+    qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки френдлі блоку без Z (формула) і AB (ручний QA)."""
-    return {
+    """Клітинки френдлі блоку без Z (формула). AB — коментар з картки."""
+    payload = {
         "N": _as_text_id(client_id),
         "O": _as_sheet_date(call_date),
         "P": manager,
@@ -366,6 +378,10 @@ def build_friendly_row_payload(
         "AA": reviewer,
         "AC": _as_sheet_date(check_date),
     }
+    comment = str(qa_comment or "").strip()
+    if comment:
+        payload["AB"] = comment
+    return payload
 
 
 def _load_dedup_store() -> dict:
@@ -558,6 +574,7 @@ def write_vip_journal_result(
         manager_name = clean_sheet_cell(manager_row.get("manager"))
         tl_name = clean_sheet_cell(manager_row.get("tl"))
 
+        qa_comment = build_journal_qa_comment(call, verdict_data)
         if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
             scores = extract_short_scores(verdict_data)
             payload = build_short_row_payload(
@@ -567,6 +584,7 @@ def write_vip_journal_result(
                 tl=tl_name,
                 scores=scores,
                 check_date=check_date,
+                qa_comment=qa_comment,
             )
             id_col = "A"
             verify_cols = list(payload.keys())
@@ -579,6 +597,7 @@ def write_vip_journal_result(
                 tl=tl_name,
                 scores=scores,
                 check_date=check_date,
+                qa_comment=qa_comment,
             )
             id_col = "N"
             verify_cols = list(payload.keys())

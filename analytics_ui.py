@@ -18,7 +18,7 @@ def render_analytics_filters(df_all) -> tuple:
     c1, c2, c3 = st.columns([2, 1.2, 1])
     with c1:
         period = st.date_input(
-            "Період (дата дзвінка)",
+            "Період (дата перевірки QA)",
             min_value=date_min,
             max_value=date.today(),
             key="analytics_period",

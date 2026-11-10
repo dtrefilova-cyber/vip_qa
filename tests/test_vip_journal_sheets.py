@@ -105,7 +105,7 @@ def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
     assert sum(v for v in scores.values()) == 57.5
 
 
-def test_short_payload_skips_formula_and_qa():
+def test_short_payload_skips_formula_writes_card_comment():
     from datetime import date
 
     scores = {"contact": 5.0, "slip_handling": 10.0, "prep": 10.0, "closing": 5.0}
@@ -116,11 +116,38 @@ def test_short_payload_skips_formula_and_qa():
         tl="TL",
         scores=scores,
         check_date=date(2026, 9, 2),
+        qa_comment="клієнт просив передзвін",
     )
     assert "I" not in payload
-    assert "K" not in payload
+    assert payload["K"] == "клієнт просив передзвін"
     assert payload["J"] == "АІ"
     assert sum(v for v in scores.values()) == 30.0
+
+
+def test_friendly_payload_writes_comment_to_ab():
+    from datetime import date
+
+    scores = {
+        "contact": 5.0,
+        "friendly_development": 7.5,
+        "personal_approach": 7.5,
+        "call_to_action": 10.0,
+        "bonus_offer": 5.0,
+        "prep": 10.0,
+        "closing": 5.0,
+        "ease": 7.5,
+    }
+    payload = build_friendly_row_payload(
+        client_id="1",
+        call_date=date(2026, 9, 1),
+        manager="М",
+        tl="Т",
+        scores=scores,
+        check_date=date(2026, 9, 2),
+        qa_comment="тон ок",
+    )
+    assert "Z" not in payload
+    assert payload["AB"] == "тон ок"
 
 
 def test_find_next_row_ignores_prefilled_below_gap():

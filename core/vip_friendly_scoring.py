@@ -721,17 +721,28 @@ def score_quoted_closing(f: ClosingFacts) -> CriterionScore:
             5.0,
             ["Зв'язок перервався"],
         )
-    elements = [
-        f.asked_if_more_questions,
-        f.said_goodbye,
-        f.thanked_and_left_contact_open,
+    element_labels = [
+        (f.asked_if_more_questions, "питання «чи є ще питання»"),
+        (f.said_goodbye, "прощання"),
+        (f.thanked_and_left_contact_open, "подяка з відкритим контактом"),
     ]
-    missing = elements.count(False)
-    if missing == 0:
+    missing_labels = [label for ok, label in element_labels if not ok]
+    if not missing_labels:
         return CriterionScore("closing", 5.0, 5.0, [])
-    if missing == 1:
-        return CriterionScore("closing", 2.5, 5.0, ["Відсутній один елемент завершення"])
-    return CriterionScore("closing", 0.0, 5.0, ["Відсутні два і більше елементи завершення"])
+    if len(missing_labels) == 1:
+        return CriterionScore(
+            "closing",
+            2.5,
+            5.0,
+            [f"Відсутній елемент завершення: {missing_labels[0]}"],
+        )
+    joined = ", ".join(missing_labels)
+    return CriterionScore(
+        "closing",
+        0.0,
+        5.0,
+        [f"Відсутні елементи завершення: {joined}"],
+    )
 
 
 def score_vip_friendly(

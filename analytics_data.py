@@ -21,11 +21,27 @@ def _flatten_row(row: dict) -> dict:
     call = debug.get("call") if isinstance(debug, dict) else {}
     if not isinstance(call, dict):
         call = {}
+    uploader = debug.get("uploader") if isinstance(debug, dict) else {}
+    if not isinstance(uploader, dict):
+        uploader = {}
     out = dict(row)
-    out["project"] = call.get("project") or out.get("project") or ""
-    out["ret_manager"] = call.get("ret_manager") or out.get("ret_manager") or ""
-    out["tl_name"] = call.get("tl") or out.get("tl_name") or ""
-    out["qa_manager"] = call.get("qa_manager") or out.get("qa_manager") or ""
+    out["project"] = out.get("project") or call.get("project") or ""
+    out["ret_manager"] = out.get("ret_manager") or call.get("ret_manager") or ""
+    out["tl_name"] = out.get("tl_name") or call.get("tl") or ""
+    # Хто завантажив аналіз (профіль QA) — окремо від VIP-менеджера дзвінка
+    out["qa_manager"] = (
+        out.get("qa_manager")
+        or uploader.get("qa_manager")
+        or call.get("qa_manager")
+        or ""
+    )
+    out["department"] = (
+        out.get("department")
+        or uploader.get("department")
+        or call.get("department")
+        or call.get("dept")
+        or "VIP"
+    )
     out["verdict"] = str(out.get("verdict") or "").lower()
     score = debug.get("score") if isinstance(debug, dict) else {}
     if not isinstance(score, dict):
@@ -80,8 +96,14 @@ def load_vip_logs() -> pd.DataFrame:
         return pd.DataFrame()
     flat = [_flatten_row(row) for row in rows]
     df = pd.DataFrame(flat)
+    # Лише VIP: не змішуємо з Retention / іншими відділами, якщо колонка є.
+    if "department" in df.columns:
+        dept = df["department"].fillna("VIP").astype(str).str.strip()
+        df = df[dept.eq("") | dept.str.casefold().eq("vip")].copy()
     df["call_date"] = pd.to_datetime(df["call_date"], errors="coerce")
-    df["period_date"] = df["call_date"]
+    df["check_date"] = pd.to_datetime(df.get("check_date"), errors="coerce")
+    # Період дашборду — за датою перевірки (коли QA завантажив), не за датою дзвінка.
+    df["period_date"] = df["check_date"].fillna(df["call_date"])
     df["is_green"] = df["verdict"].eq("green")
     df["is_red"] = df["verdict"].eq("red")
     df["percent"] = pd.to_numeric(df.get("percent"), errors="coerce")

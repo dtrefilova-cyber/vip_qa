@@ -214,13 +214,19 @@ def _contact_without_messenger(f: ContactFacts) -> tuple[float, str]:
         return 5.0, reason + suffix
 
     # Д11: перевірка зручності обов'язкова разом із привітанням, ім'ям і проєктом.
-    required = [f.greeted, f.used_client_name, f.named_project, f.availability_check_done]
-    missing = required.count(False)
-    if missing == 0:
+    element_labels = [
+        (f.greeted, "привітання"),
+        (f.used_client_name, "ім'я клієнта"),
+        (f.named_project, "назва проєкту"),
+        (f.availability_check_done, "перевірка зручності («вам зручно» / «є хвилинка»)"),
+    ]
+    missing_labels = [label for ok, label in element_labels if not ok]
+    if not missing_labels:
         return 5.0, ""
-    if missing == 1:
-        return 2.5, "Відсутній один із ключових елементів привітання" + suffix
-    return 0.0, "Жоден з пунктів привітання не озвучено" + suffix
+    if len(missing_labels) == 1:
+        return 2.5, f"Відсутній елемент привітання: {missing_labels[0]}" + suffix
+    joined = ", ".join(missing_labels)
+    return 0.0, f"Відсутні елементи привітання: {joined}" + suffix
 
 
 def _contact_messenger(f: ContactFacts) -> tuple[float, str] | None:
@@ -322,24 +328,25 @@ def score_closing(f: ClosingFacts, ctx: SharedCallContext) -> CriterionScore:
             5.0,
             ["Д14: автозалік завершення — " + f.d14_quote.strip()],
         )
-    elements = [
-        f.asked_if_more_questions,
-        f.said_goodbye,
-        f.thanked_and_left_contact_open,
+    element_labels = [
+        (f.asked_if_more_questions, "питання «чи є ще питання»"),
+        (f.said_goodbye, "прощання"),
+        (f.thanked_and_left_contact_open, "подяка з відкритим контактом"),
     ]
-    missing = elements.count(False)
-    if missing == 0:
+    missing_labels = [label for ok, label in element_labels if not ok]
+    if not missing_labels:
         return CriterionScore("closing", 5.0, 5.0, [])
-    if missing == 1:
+    if len(missing_labels) == 1:
         return CriterionScore(
             "closing",
             2.5,
             5.0,
-            ["Відсутній один елемент завершення"],
+            [f"Відсутній елемент завершення: {missing_labels[0]}"],
         )
+    joined = ", ".join(missing_labels)
     return CriterionScore(
         "closing",
         0.0,
         5.0,
-        ["Відсутні два і більше елементи завершення"],
+        [f"Відсутні елементи завершення: {joined}"],
     )

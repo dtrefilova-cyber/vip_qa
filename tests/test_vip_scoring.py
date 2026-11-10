@@ -12,11 +12,13 @@ from core.vip_friendly_scoring import (
     score_vip_friendly,
 )
 from core.vip_scoring_common import (
+    ClosingFacts,
     ContactFacts,
     Objection,
     ObjectionHandling,
     PrepFacts,
     SharedCallContext,
+    score_closing,
     score_contact,
     score_prep,
 )
@@ -47,7 +49,25 @@ def test_contact_missing_one():
         availability_check_relevant=True,
         availability_check_done=True,
     )
-    assert score_contact(f).points == 2.5
+    result = score_contact(f)
+    assert result.points == 2.5
+    assert any("ім'я клієнта" in r for r in result.reasons)
+
+
+def test_contact_missing_names_all_elements():
+    f = ContactFacts(
+        greeted=False,
+        used_client_name=False,
+        named_project=False,
+        availability_check_done=False,
+    )
+    result = score_contact(f)
+    assert result.points == 0.0
+    blob = " ".join(result.reasons)
+    assert "привітання" in blob
+    assert "ім'я клієнта" in blob
+    assert "назва проєкту" in blob
+    assert "перевірка зручності" in blob
 
 
 def test_prep_no_objections_auto_max():
@@ -107,6 +127,17 @@ def test_friendly_development_full_signals():
         evidence=["Менеджер: як пройшли вихідні?", "Менеджер: а що плануєте?"],
     )
     assert score_friendly_development(f, "Менеджер: як пройшли вихідні?\nМенеджер: а що плануєте?").points == 7.5
+
+
+def test_closing_missing_names_specific_element():
+    f = ClosingFacts(
+        asked_if_more_questions=True,
+        said_goodbye=False,
+        thanked_and_left_contact_open=True,
+    )
+    result = score_closing(f, SharedCallContext())
+    assert result.points == 2.5
+    assert any("прощання" in r for r in result.reasons)
 
 
 def test_ai_models_registers_portal_tasks():

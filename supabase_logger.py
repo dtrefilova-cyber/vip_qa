@@ -175,7 +175,19 @@ def log_vip_short_call_to_supabase(
         "percent",
         "is_critical_fail",
         "check_date",
+        "qa_manager",
+        "ret_manager",
+        "project",
+        "tl_name",
+        "department",
     }
+
+    qa_manager = str(call.get("qa_manager") or "").strip()
+    ret_manager = str(call.get("ret_manager") or call.get("manager") or "").strip()
+    project = str(call.get("project") or "").strip()
+    tl_name = str(call.get("tl") or "").strip()
+    # VIP-застосунок — лише відділ VIP; не змішуємо з Retention.
+    department = str(call.get("department") or call.get("dept") or "VIP").strip() or "VIP"
 
     row = {
         "call_url": call.get("url", ""),
@@ -195,6 +207,12 @@ def log_vip_short_call_to_supabase(
         "forbidden_words_found": [],
         "rudeness_detected": False,
         "rudeness_confidence": "low",
+        # Хто завантажив/проаналізував дзвінок (профіль QA у сайдбарі)
+        "qa_manager": qa_manager,
+        "ret_manager": ret_manager,
+        "project": project,
+        "tl_name": tl_name,
+        "department": department,
         # New rubric fields (nullable on DB; also mirrored into debug_data)
         "call_type": verdict_data.get("call_type") or call.get("vip_call_type"),
         "rubric_version": verdict_data.get("rubric_version"),
@@ -221,6 +239,7 @@ def log_vip_short_call_to_supabase(
                 "rubric_version": verdict_data.get("rubric_version"),
                 "score_label": verdict_data.get("score_label"),
             },
+            "uploader": {"qa_manager": qa_manager, "department": department},
             "build_sha": BUILD_SHA,
         },
     }
