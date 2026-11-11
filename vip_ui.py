@@ -26,7 +26,7 @@ CALL_PAGE_META = {
         "active": "short",
         "title": "Короткі дзвінки",
         "heading": "Короткі дзвінки",
-        "caption": "Таймінг — 30–90 с · Максимальний бал за дзвінок — 30",
+        "caption": "Таймінг — 30–120 с · Максимальний бал за дзвінок — 30",
     },
     CALL_TYPE_FRIENDLY: {
         "active": "friendly",
@@ -71,7 +71,13 @@ def render_call_entry_page(call_type: str) -> None:
     """call_type — CALL_TYPE_SHORT_90S або CALL_TYPE_FRIENDLY."""
     if call_type not in CALL_PAGE_META:
         # backward-compat aliases
-        if str(call_type).strip() in {"Короткий", "short", "vip_short_90s"}:
+        if str(call_type).strip() in {
+            "Короткий",
+            "Короткий 90 сек",
+            "Короткий 120 сек",
+            "short",
+            "vip_short_90s",
+        }:
             call_type = CALL_TYPE_SHORT_90S
         elif str(call_type).strip() in {"friendly", "vip_friendly"}:
             call_type = CALL_TYPE_FRIENDLY

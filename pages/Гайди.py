@@ -53,7 +53,7 @@ setup_page("Гайди", active="guides")
 render_page_header("Гайди")
 
 tab_short, tab_friendly, tab_additions = st.tabs(
-    ["Короткий 90 сек", "VIP Friendly", "Затверджені доповнення"]
+    ["Короткий 120 сек", "VIP Friendly", "Затверджені доповнення"]
 )
 
 with tab_short:

@@ -1,4 +1,4 @@
-"""VIP — головна сторінка з картками (Короткий 90 сек / VIP Friendly)."""
+"""VIP — головна сторінка з картками (Короткий 120 сек / VIP Friendly)."""
 
 from __future__ import annotations
 

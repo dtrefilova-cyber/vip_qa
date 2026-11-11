@@ -32,6 +32,7 @@ def test_call_type_from_analyzer_choice_not_duration():
     assert resolve_journal_call_type("short") == "short"
     assert resolve_journal_call_type("friendly") == "friendly"
     assert resolve_journal_call_type("Короткий 90 сек") == "short"
+    assert resolve_journal_call_type("Короткий 120 сек") == "short"
     assert resolve_journal_call_type("VIP Friendly (2-й дзвінок)") == "friendly"
     assert resolve_journal_call_type("vip_friendly") == "friendly"
     assert resolve_journal_call_type("") is None

@@ -59,7 +59,8 @@ VIP_JOURNAL_PROJECTS = {
     },
 }
 
-CALL_TYPE_SHORT_90S = "Короткий 90 сек"
+CALL_TYPE_SHORT_90S = "Короткий 120 сек"
+CALL_TYPE_SHORT_90S_LEGACY = "Короткий 90 сек"
 CALL_TYPE_FRIENDLY = "VIP Friendly (2-й дзвінок)"
 CALL_TYPES = [CALL_TYPE_SHORT_90S, CALL_TYPE_FRIENDLY]
 
@@ -68,6 +69,7 @@ CALL_TYPE_KEY_FRIENDLY = "vip_friendly"
 
 CALL_TYPE_KEYS = {
     CALL_TYPE_SHORT_90S: CALL_TYPE_KEY_SHORT,
+    CALL_TYPE_SHORT_90S_LEGACY: CALL_TYPE_KEY_SHORT,
     CALL_TYPE_FRIENDLY: CALL_TYPE_KEY_FRIENDLY,
 }
 
@@ -80,12 +82,14 @@ CALL_TYPE_MAX_SCORE = {
     CALL_TYPE_KEY_SHORT: 30.0,
     CALL_TYPE_KEY_FRIENDLY: 57.5,
     CALL_TYPE_SHORT_90S: 30.0,
+    CALL_TYPE_SHORT_90S_LEGACY: 30.0,
     CALL_TYPE_FRIENDLY: 57.5,
 }
 
 # UI slug для session_state / кешу карток (окремо на сторінку)
 PAGE_SLUGS = {
     CALL_TYPE_SHORT_90S: "short",
+    CALL_TYPE_SHORT_90S_LEGACY: "short",
     CALL_TYPE_FRIENDLY: "friendly",
     CALL_TYPE_KEY_SHORT: "short",
     CALL_TYPE_KEY_FRIENDLY: "friendly",
@@ -144,7 +148,7 @@ def resolve_call_type_key(value: str | None) -> str | None:
     low = text.lower()
     if "friendly" in low:
         return CALL_TYPE_KEY_FRIENDLY
-    if "short" in low or "коротк" in low or "90" in low:
+    if "short" in low or "коротк" in low or "90" in low or "120" in low:
         return CALL_TYPE_KEY_SHORT
     return None
 

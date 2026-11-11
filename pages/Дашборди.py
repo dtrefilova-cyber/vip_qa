@@ -80,8 +80,8 @@ def _normalize_call_type(value: str) -> str:
     text = str(value or "").strip().casefold()
     if "friendly" in text or "френд" in text:
         return "Friendly"
-    if "short" in text or "коротк" in text or "90" in text:
-        return "Короткий 90 сек"
+    if "short" in text or "коротк" in text or "90" in text or "120" in text:
+        return "Короткий 120 сек"
     return str(value or "").strip() or "—"
 
 

@@ -1,4 +1,4 @@
-"""AI-екстракція фактів для VIP Короткий 90 сек і VIP Friendly."""
+"""AI-екстракція фактів для VIP Короткий 120 сек (30–120 с) і VIP Friendly."""
 
 from __future__ import annotations
 
