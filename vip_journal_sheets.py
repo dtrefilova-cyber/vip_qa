@@ -491,52 +491,44 @@ def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str
         logger.warning("VIP journal friendly headers incomplete; using fallback letters")
         friendly = dict(_FALLBACK_FRIENDLY_COLS)
 
+    # У skip тільки реальні колонки формули з заголовка (не здогадки I/J/Z/AA/AB —
+    # інакше банимо «Завершення» на I після insert).
     skip = {
         letter
-        for letter in (
-            short.get("total_score"),
-            friendly.get("total_score"),
-            *_FORMULA_LETTER_CANDIDATES,
-        )
+        for letter in (short.get("total_score"), friendly.get("total_score"))
         if letter
     }
-    # Приберімо з skip літери, які точно є score/meta в розпізнаній мапі (не формула).
-    writable = set()
-    for block in (short, friendly):
-        for field, letter in block.items():
-            if field != "total_score" and letter:
-                writable.add(letter)
-    skip -= writable
-    # Формулу з заголовка завжди лишаємо в skip.
-    for block in (short, friendly):
-        formula = block.get("total_score")
-        if formula:
-            skip.add(formula)
+    # Додатково: будь-яка літера з hits, де field == total_score (на випадок дублікатів).
+    for idx, field in hits:
+        if field == "total_score":
+            skip.add(col_index_to_letter(idx))
     return {"short": short, "friendly": friendly, "skip": skip}
 
 
 def load_journal_column_map(worksheet) -> dict[str, dict[str, str]]:
-    """Читає заголовки (рядки 1–4) і кешує мапу колонок на час процесу."""
-    cache_key = f"{getattr(worksheet, 'id', id(worksheet))}"
-    cached = _HEADER_CACHE.get(cache_key)
-    if cached:
-        return cached
+    """Читає заголовки (рядки 1–5) щоразу — без кешу, щоб зсув колонок одразу підхоплювався."""
     rows = []
-    for row_no in range(1, 5):
+    for row_no in range(1, 6):
         try:
             rows.append(sheets_retry(worksheet.row_values, row_no))
         except Exception:
             rows.append([])
+    # Fallback: широкий get, якщо row_values порожні (merged headers).
+    if not any(any(clean_sheet_cell(c) for c in row) for row in rows):
+        try:
+            block = sheets_retry(worksheet.get, "A1:AZ5")
+            rows = list(block or [])
+        except Exception:
+            logger.exception("VIP journal header get(A1:AZ5) failed")
     mapping = discover_journal_columns(rows)
-    _HEADER_CACHE[cache_key] = mapping
     logger.info(
-        "VIP journal columns worksheet=%s short=%s friendly=%s",
-        cache_key,
+        "VIP journal columns worksheet=%s skip=%s short=%s friendly=%s",
+        getattr(worksheet, "id", id(worksheet)),
+        mapping.get("skip"),
         mapping.get("short"),
         mapping.get("friendly"),
     )
     return mapping
-
 
 def build_short_field_values(
     *,
@@ -612,13 +604,6 @@ def fields_to_letter_payload(
     formula_letter = colmap.get("total_score")
     if formula_letter:
         banned.add(formula_letter)
-    banned.update(_FORMULA_LETTER_CANDIDATES)
-    # Не банити літери, які в цій мапі точно не формула.
-    for field, letter in colmap.items():
-        if field != "total_score" and letter:
-            banned.discard(letter)
-    if formula_letter:
-        banned.add(formula_letter)
 
     for field, value in fields.items():
         if field == "total_score":
@@ -629,6 +614,11 @@ def fields_to_letter_payload(
                 continue
             raise VipJournalError(f"У заголовках журналу немає колонки для поля «{field}».")
         if letter in banned:
+            logger.warning(
+                "VIP journal skip banned/formula column %s for field %s",
+                letter,
+                field,
+            )
             continue
         if value == "" or value is None:
             continue
@@ -784,14 +774,23 @@ def _parse_protected_data_index(exc: BaseException) -> int | None:
         return None
 
 
-def _write_cells(worksheet, row: int, payload: dict[str, Any]) -> None:
-    data = [{"range": _a1(col, row), "values": [[value]]} for col, value in payload.items()]
-    if not data:
-        return
+def _write_one_cell(worksheet, row: int, col: str, value: Any) -> None:
+    # Один range через batch_update — той самий API, що вже ходить у Sheets;
+    # так protected на одній комірці не валить інші (на відміну від пакета з N ranges).
     sheets_retry(
         worksheet.batch_update,
-        data,
+        [{"range": _a1(col, row), "values": [[value]]}],
         value_input_option="USER_ENTERED",
+    )
+
+
+def _is_protected_cell_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "protected" in text
+        or "захищен" in text
+        or "защищен" in text
+        or "you are trying to edit a protected cell" in text
     )
 
 
@@ -820,39 +819,38 @@ def _drop_formula_cells(worksheet, row: int, payload: dict[str, Any]) -> dict[st
 
 
 def _write_cells_resilient(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """Пише payload; protected-комірки викидає й повторює, щоб бали все одно потрапили в журнал."""
+    """Пише по одній комірці: protected/формула не валить увесь рядок (бали все одно потрапляють)."""
     pending = _drop_formula_cells(worksheet, row, dict(payload))
+    written: dict[str, Any] = {}
     skipped: list[str] = []
-    while pending:
+    for col, value in list(pending.items()):
         try:
-            _write_cells(worksheet, row, pending)
-            if skipped:
-                logger.warning(
-                    "VIP journal wrote row=%s after skipping protected cols=%s",
-                    row,
-                    skipped,
-                )
-            return pending
+            _write_one_cell(worksheet, row, col, value)
+            written[col] = value
         except Exception as exc:
-            err = str(exc)
-            if "protected" not in err.lower():
-                raise
-            idx = _parse_protected_data_index(exc)
-            keys = list(pending.keys())
-            if idx is None or idx < 0 or idx >= len(keys):
-                raise
-            bad = keys[idx]
-            skipped.append(bad)
-            logger.warning(
-                "VIP journal protected cell %s%d (data[%s]) — skip and retry",
-                bad,
-                row,
-                idx,
-            )
-            pending.pop(bad, None)
-    raise VipJournalError(
-        "Усі комірки запису захищені; не вдалося записати рядок журналу."
-    )
+            if _is_protected_cell_error(exc):
+                skipped.append(col)
+                logger.warning(
+                    "VIP journal skip protected cell %s%d: %s",
+                    col,
+                    row,
+                    exc,
+                )
+                continue
+            raise
+    if not written:
+        raise VipJournalError(
+            "Усі комірки запису захищені; не вдалося записати рядок журналу."
+            + (f" Пропущено: {', '.join(skipped)}" if skipped else "")
+        )
+    if skipped:
+        logger.warning(
+            "VIP journal wrote row=%s cols=%s skipped_protected=%s",
+            row,
+            list(written.keys()),
+            skipped,
+        )
+    return written
 
 
 def _read_cells(
@@ -1100,15 +1098,19 @@ def write_vip_journal_result(
             }
             remember_write(analysis_id, mapping)
 
+        from utils import BUILD_SHA
+
+        written_cols = ",".join(written_payload.keys()) if written_payload else ""
         return {
             "ok": True,
-            "status": "Записано",
+            "status": f"Записано · {route['title']} · рядок {row} · {BUILD_SHA}",
             "duplicate": False,
             "analysis_id": analysis_id,
             "row": row,
             "sheet_title": route["title"],
             "sheet_id": route["sheet_id"],
             "call_type": call_type,
+            "written_cols": written_cols,
             "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
             "critical_reasons": list(verdict_data.get("critical_reasons") or []),
         }
