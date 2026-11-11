@@ -40,31 +40,33 @@ _DEDUP_PATH = _DEDUP_DIR / "vip_journal_writes.json"
 _HEADER_CACHE: dict[str, dict[str, dict[str, str]]] = {}
 
 # field → підрядки заголовка (casefold). Більш специфічні — першими.
+# УВАГА: не матчити «менеджер» / «tl» як голий substring — ламає
+# «Робота менеджера зі зливом» і «Статус від TL».
 _HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("client_id", ("id клієнта", "id клиента", "client id")),
     ("call_date", ("дата дзвінка", "дата звонка")),
     ("check_date", ("дата перевірки", "дата проверки")),
-    ("manager", ("піб менеджера", "менеджер vip", "менеджер")),
-    ("tl", ("тімлід", "тимлид", "tl")),
-    ("contact", ("встановлення контакту", "установление контакта")),
+    ("tl_status", ("статус від tl", "статус tl", "статус від тімлід")),
     ("slip_handling", ("злив", "утримання контакту", "удержание контакта")),
+    ("contact", ("встановлення контакту", "установление контакта")),
     ("friendly_development", ("розвиток френдлі", "развитие френдли", "френдлі")),
     ("personal_approach", ("індивідуальний підхід", "индивидуальный подход")),
     ("call_to_action", ("заклик до гри", "призыв к игре")),
     ("bonus_offer", ("пропозиція бонусів", "предложение бонусов")),
-    ("prep", ("p.r.e.p", "prep", "заперечення", "возражен")),
+    ("prep", ("p.r.e.p", "prep", "заперечення", "заперення", "возражен")),
     ("closing", ("завершення", "завершение")),
     ("ease", ("невимушеність", "непринужденность")),
     ("total_score", ("бал за дзвінок", "балл за звонок")),
     ("reviewer", ("перевіряючий", "проверяющий")),
     ("comment", ("коментар qa", "комментарий qa", "коментар", "комментарий")),
+    ("manager", ("піб менеджера", "менеджер vip")),
+    ("tl", ("тімлід", "тимлид")),
 ]
 
 _SOFT_FIELD_KEYS = frozenset({"call_date", "check_date", "comment", "reviewer"})
 
-# Fallback після ОДНІЄЇ колонки справа від TL (зсув усього аркуша +1):
-# short A:M (E службова, J формула), friendly O:AD (AA формула).
-# Якщо в friendly теж вставлено колонку після TL — спрацьовує discover за заголовками.
+# Fallback = реальний журнал Betking/777/Vegas після колонки «Статус від TL»
+# у short і friendly: short A:M (E статус, J формула), friendly O:AE (S статус, AB формула).
 _FALLBACK_SHORT_COLS = {
     "client_id": "A",
     "call_date": "B",
@@ -84,21 +86,19 @@ _FALLBACK_FRIENDLY_COLS = {
     "call_date": "P",
     "manager": "Q",
     "tl": "R",
-    "contact": "S",
-    "friendly_development": "T",
-    "personal_approach": "U",
-    "call_to_action": "V",
-    "bonus_offer": "W",
-    "prep": "X",
-    "closing": "Y",
-    "ease": "Z",
-    "total_score": "AA",
-    "reviewer": "AB",
-    "comment": "AC",
-    "check_date": "AD",
+    "contact": "T",
+    "friendly_development": "U",
+    "personal_approach": "V",
+    "call_to_action": "W",
+    "bonus_offer": "X",
+    "prep": "Y",
+    "closing": "Z",
+    "ease": "AA",
+    "total_score": "AB",
+    "reviewer": "AC",
+    "comment": "AD",
+    "check_date": "AE",
 }
-# Кандидати формули балу для обох розкладок (1 або 2 insert після TL) — ніколи не пишемо.
-_FORMULA_LETTER_CANDIDATES = frozenset({"I", "J", "Z", "AA", "AB"})
 
 # Допустимі бали за ТЗ (роздільник у Sheets — числовий float).
 _ALLOWED_SHORT = {
@@ -418,6 +418,11 @@ def _match_header_field(header: str) -> str | None:
     text = _norm_header(header)
     if not text:
         return None
+    # Точні короткі заголовки (інакше «Статус від TL» / «менеджер» у чужих фразах).
+    if text == "tl":
+        return "tl"
+    if text in {"менеджер", "manager"}:
+        return "manager"
     for field, patterns in _HEADER_FIELD_PATTERNS:
         for pattern in patterns:
             if pattern in text:
@@ -610,9 +615,9 @@ def fields_to_letter_payload(
             continue
         letter = colmap.get(field)
         if not letter:
-            if field in {"comment", "tl", "reviewer", "check_date", "call_date"}:
-                continue
-            raise VipJournalError(f"У заголовках журналу немає колонки для поля «{field}».")
+            # Не валимо весь рядок через одну відсутню колонку — пишемо решту.
+            logger.warning("VIP journal missing column for field %s — skip field", field)
+            continue
         if letter in banned:
             logger.warning(
                 "VIP journal skip banned/formula column %s for field %s",
