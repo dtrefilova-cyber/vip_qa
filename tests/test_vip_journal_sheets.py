@@ -7,6 +7,7 @@ from vip_journal_sheets import (
     VipJournalError,
     build_friendly_row_payload,
     build_short_row_payload,
+    discover_journal_columns,
     extract_friendly_scores,
     extract_short_scores,
     find_next_journal_row,
@@ -99,10 +100,12 @@ def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
         check_date=date(2026, 11, 10),
     )
     assert payload["O"].startswith("'")
-    assert "E" not in payload
-    assert "AA" not in payload  # формула балу
-    assert payload["AB"] == "АІ"
-    assert payload["Z"] == 7.5
+    assert "S" not in payload  # нова колонка після TL
+    assert "AB" not in payload  # формула балу
+    assert payload["AC"] == "АІ"
+    assert payload["T"] == 5.0
+    assert payload["AA"] == 7.5  # невимушеність
+    assert payload["Z"] == 5.0  # завершення
     assert sum(v for v in scores.values()) == 57.5
 
 
@@ -147,7 +150,7 @@ def test_short_payload_skips_formula_writes_result_comment():
     assert sum(v for v in scores.values()) == 30.0
 
 
-def test_friendly_payload_writes_result_comment_to_ac():
+def test_friendly_payload_writes_result_comment_to_ad():
     from datetime import date
 
     scores = {
@@ -169,9 +172,9 @@ def test_friendly_payload_writes_result_comment_to_ac():
         check_date=date(2026, 9, 2),
         qa_comment="— Завершення: 2.5/5 (Відсутній елемент завершення: прощання)",
     )
-    assert "AA" not in payload
-    assert "прощання" in payload["AC"]
-    assert payload["AB"] == "АІ"
+    assert "AB" not in payload  # формула
+    assert "прощання" in payload["AD"]
+    assert payload["AC"] == "АІ"
 
 
 def test_find_next_row_ignores_prefilled_below_gap():
@@ -188,8 +191,26 @@ def test_find_next_row_skips_row_with_manager_but_empty_id():
 
 
 def test_payload_matches_ignores_date_and_comment_drift():
-    from vip_journal_sheets import _payload_matches, _strict_cols_for_payload
+    from vip_journal_sheets import _payload_matches, _strict_cols_for_fields
 
+    fields = {
+        "client_id": "'100",
+        "call_date": "10.11.2026",
+        "manager": "Менеджер",
+        "contact": 5.0,
+        "comment": "довгий коментар\nз переносом",
+        "reviewer": "АІ",
+        "check_date": "11.11.2026",
+    }
+    colmap = {
+        "client_id": "A",
+        "call_date": "B",
+        "manager": "C",
+        "contact": "F",
+        "comment": "L",
+        "reviewer": "K",
+        "check_date": "M",
+    }
     expected = {
         "A": "'100",
         "B": "10.11.2026",
@@ -208,8 +229,66 @@ def test_payload_matches_ignores_date_and_comment_drift():
         "K": "АІ",
         "M": "2026-11-11",
     }
-    strict = _strict_cols_for_payload(expected)
+    strict = _strict_cols_for_fields(fields, colmap)
+    assert strict == {"A", "C", "F"}
     assert _payload_matches(expected, actual, strict_cols=strict) is True
+
+
+def test_discover_columns_after_tl_insert_for_both_blocks():
+    headers = [[
+        "ID клієнта",
+        "Дата дзвінка",
+        "ПІБ менеджера VIP",
+        "TL",
+        "Нова колонка",
+        "Встановлення контакту",
+        "Робота зі зливом",
+        "P.R.E.P",
+        "Завершення",
+        "Бал за дзвінок",
+        "Перевіряючий",
+        "Коментар QA",
+        "Дата перевірки",
+        "",
+        "ID клієнта",
+        "Дата дзвінка",
+        "ПІБ менеджера VIP",
+        "TL",
+        "Нова колонка",
+        "Встановлення контакту",
+        "Розвиток френдлі",
+        "Індивідуальний підхід",
+        "Заклик до гри",
+        "Пропозиція бонусів",
+        "P.R.E.P",
+        "Завершення",
+        "Невимушеність",
+        "Бал за дзвінок",
+        "Перевіряючий",
+        "Коментар QA",
+        "Дата перевірки",
+    ]]
+    mapping = discover_journal_columns(headers)
+    short = mapping["short"]
+    friendly = mapping["friendly"]
+    assert short["client_id"] == "A"
+    assert short["tl"] == "D"
+    assert short["contact"] == "F"
+    assert short["closing"] == "I"
+    assert short["total_score"] == "J"
+    assert short["reviewer"] == "K"
+    assert short["comment"] == "L"
+    assert short["check_date"] == "M"
+    assert "E" not in short.values()  # нову колонку не мапимо як score
+    assert friendly["client_id"] == "O"
+    assert friendly["tl"] == "R"
+    assert friendly["contact"] == "T"  # після нової колонки справа від TL
+    assert friendly["closing"] == "Z"
+    assert friendly["ease"] == "AA"
+    assert friendly["total_score"] == "AB"
+    assert friendly["reviewer"] == "AC"
+    assert friendly["comment"] == "AD"
+    assert friendly["check_date"] == "AE"
 
 
 def test_manager_lookup_by_project_and_login():

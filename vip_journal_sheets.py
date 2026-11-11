@@ -1,13 +1,8 @@
 """Автозапис результатів VIP-аналізу в журнал за проєктом (Betking / 777 / Vegas).
 
-Після додавання колонки справа від TL (зсув з E):
-
-Короткі → A:M
-  A ID, B дата, C менеджер, D TL, E службова (не пишемо),
-  F–I бали, J формула «Бал» (не пишемо), K перевіряючий, L коментар, M дата перевірки.
-
-Френдлі → O:AD (блок зсунуто на +1 через insert після D)
-  O ID … R TL, S–Z бали, AA формула (не пишемо), AB перевіряючий, AC коментар, AD дата перевірки.
+Колонки визначаються за заголовками аркуша (а не жорсткими літерами), щоб
+однакова логіка працювала для Betking / 777 / Vegas і short / friendly після
+зсувів (напр. нова колонка справа від TL). Колонку «Бал за дзвінок» ніколи не пишемо.
 """
 
 from __future__ import annotations
@@ -35,13 +30,69 @@ from constants import (
     VIP_JOURNAL_TZ,
     resolve_call_type_key,
 )
-from google_sheets import clean_sheet_cell, sheets_retry
+from google_sheets import clean_sheet_cell, col_index_to_letter, sheets_retry
 
 logger = logging.getLogger(__name__)
 
 _WRITE_LOCK = threading.Lock()
 _DEDUP_DIR = Path(__file__).resolve().parent / ".cache"
 _DEDUP_PATH = _DEDUP_DIR / "vip_journal_writes.json"
+_HEADER_CACHE: dict[str, dict[str, dict[str, str]]] = {}
+
+# field → підрядки заголовка (casefold). Більш специфічні — першими.
+_HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
+    ("client_id", ("id клієнта", "id клиента", "client id")),
+    ("call_date", ("дата дзвінка", "дата звонка")),
+    ("check_date", ("дата перевірки", "дата проверки")),
+    ("manager", ("піб менеджера", "менеджер vip", "менеджер")),
+    ("tl", ("тімлід", "тимлид", "tl")),
+    ("contact", ("встановлення контакту", "установление контакта")),
+    ("slip_handling", ("злив", "утримання контакту", "удержание контакта")),
+    ("friendly_development", ("розвиток френдлі", "развитие френдли", "френдлі")),
+    ("personal_approach", ("індивідуальний підхід", "индивидуальный подход")),
+    ("call_to_action", ("заклик до гри", "призыв к игре")),
+    ("bonus_offer", ("пропозиція бонусів", "предложение бонусов")),
+    ("prep", ("p.r.e.p", "prep", "заперечення", "возражен")),
+    ("closing", ("завершення", "завершение")),
+    ("ease", ("невимушеність", "непринужденность")),
+    ("total_score", ("бал за дзвінок", "балл за звонок")),
+    ("reviewer", ("перевіряючий", "проверяющий")),
+    ("comment", ("коментар qa", "комментарий qa", "коментар", "комментарий")),
+]
+
+_SOFT_FIELD_KEYS = frozenset({"call_date", "check_date", "comment", "reviewer"})
+
+# Fallback після колонки справа від TL у обох блоках (short A:M, friendly O:AE).
+_FALLBACK_SHORT_COLS = {
+    "client_id": "A",
+    "call_date": "B",
+    "manager": "C",
+    "tl": "D",
+    "contact": "F",
+    "slip_handling": "G",
+    "prep": "H",
+    "closing": "I",
+    "reviewer": "K",
+    "comment": "L",
+    "check_date": "M",
+}
+_FALLBACK_FRIENDLY_COLS = {
+    "client_id": "O",
+    "call_date": "P",
+    "manager": "Q",
+    "tl": "R",
+    "contact": "T",
+    "friendly_development": "U",
+    "personal_approach": "V",
+    "call_to_action": "W",
+    "bonus_offer": "X",
+    "prep": "Y",
+    "closing": "Z",
+    "ease": "AA",
+    "reviewer": "AC",
+    "comment": "AD",
+    "check_date": "AE",
+}
 
 # Допустимі бали за ТЗ (роздільник у Sheets — числовий float).
 _ALLOWED_SHORT = {
@@ -346,11 +397,212 @@ def find_next_journal_row(
 
 
 def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None = None) -> str:
-    """Коментар у L/AC: розбір результатів аналізу (критерії + конкретні причини)."""
+    """Коментар QA в журналі: розбір результатів аналізу (критерії + конкретні причини)."""
     _ = call
     from google_sheets import format_vip_score_comment_for_sheet
 
     return str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
+
+
+def _norm_header(value: str) -> str:
+    return clean_sheet_cell(value).casefold().replace("ё", "е")
+
+
+def _match_header_field(header: str) -> str | None:
+    text = _norm_header(header)
+    if not text:
+        return None
+    for field, patterns in _HEADER_FIELD_PATTERNS:
+        for pattern in patterns:
+            if pattern in text:
+                return field
+    return None
+
+
+_FRIENDLY_ONLY_FIELDS = frozenset(
+    {
+        "friendly_development",
+        "personal_approach",
+        "call_to_action",
+        "bonus_offer",
+        "ease",
+    }
+)
+_SHORT_ONLY_FIELDS = frozenset({"slip_handling"})
+
+
+def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str]]:
+    """Знаходить колонки short/friendly за заголовками.
+
+    Повертає {"short": {field: "A", ...}, "friendly": {...}}.
+    Колонка total_score (формула) потрапляє в мапу лише щоб її свідомо пропускати.
+    """
+    width = max((len(row) for row in header_rows or []), default=0)
+    merged: list[str] = []
+    for idx in range(width):
+        parts = []
+        for row in header_rows or []:
+            if idx < len(row):
+                cell = clean_sheet_cell(row[idx])
+                if cell:
+                    parts.append(cell)
+        merged.append(" / ".join(parts))
+
+    hits: list[tuple[int, str]] = []
+    for idx, header in enumerate(merged, start=1):
+        field = _match_header_field(header)
+        if field:
+            hits.append((idx, field))
+
+    # Межа блоків — перед другим «ID клієнта» (не середнє арифметичне).
+    client_idxs = [idx for idx, field in hits if field == "client_id"]
+    if len(client_idxs) >= 2:
+        split = client_idxs[1] - 0.5
+    else:
+        total_idxs = [idx for idx, field in hits if field == "total_score"]
+        split = (total_idxs[0] + 0.5) if total_idxs else 13.5
+
+    short: dict[str, str] = {}
+    friendly: dict[str, str] = {}
+    for idx, field in hits:
+        letter = col_index_to_letter(idx)
+        if field in _FRIENDLY_ONLY_FIELDS:
+            friendly[field] = letter
+            continue
+        if field in _SHORT_ONLY_FIELDS:
+            short[field] = letter
+            continue
+        if idx <= split:
+            short.setdefault(field, letter)
+        else:
+            friendly.setdefault(field, letter)
+
+    short_required = ("client_id", "manager", "contact", "closing", "reviewer", "check_date")
+    friendly_required = (
+        "client_id",
+        "manager",
+        "contact",
+        "ease",
+        "closing",
+        "reviewer",
+        "check_date",
+    )
+    if not all(k in short for k in short_required):
+        logger.warning("VIP journal short headers incomplete; using fallback letters")
+        short = dict(_FALLBACK_SHORT_COLS)
+    if not all(k in friendly for k in friendly_required):
+        logger.warning("VIP journal friendly headers incomplete; using fallback letters")
+        friendly = dict(_FALLBACK_FRIENDLY_COLS)
+    return {"short": short, "friendly": friendly}
+
+
+def load_journal_column_map(worksheet) -> dict[str, dict[str, str]]:
+    """Читає заголовки (рядки 1–4) і кешує мапу колонок на час процесу."""
+    cache_key = f"{getattr(worksheet, 'id', id(worksheet))}"
+    cached = _HEADER_CACHE.get(cache_key)
+    if cached:
+        return cached
+    rows = []
+    for row_no in range(1, 5):
+        try:
+            rows.append(sheets_retry(worksheet.row_values, row_no))
+        except Exception:
+            rows.append([])
+    mapping = discover_journal_columns(rows)
+    _HEADER_CACHE[cache_key] = mapping
+    logger.info(
+        "VIP journal columns worksheet=%s short=%s friendly=%s",
+        cache_key,
+        mapping.get("short"),
+        mapping.get("friendly"),
+    )
+    return mapping
+
+
+def build_short_field_values(
+    *,
+    client_id: str,
+    call_date: date | None,
+    manager: str,
+    tl: str,
+    scores: dict[str, float | None],
+    check_date: date | None,
+    reviewer: str = VIP_JOURNAL_REVIEWER,
+    qa_comment: str = "",
+) -> dict[str, Any]:
+    fields = {
+        "client_id": _as_text_id(client_id),
+        "call_date": _as_sheet_date(call_date),
+        "manager": manager,
+        "tl": tl,
+        "contact": _score_cell(scores.get("contact")),
+        "slip_handling": _score_cell(scores.get("slip_handling")),
+        "prep": _score_cell(scores.get("prep")),
+        "closing": _score_cell(scores.get("closing")),
+        "reviewer": reviewer,
+        "check_date": _as_sheet_date(check_date),
+    }
+    comment = str(qa_comment or "").strip()
+    if comment:
+        fields["comment"] = comment
+    return fields
+
+
+def build_friendly_field_values(
+    *,
+    client_id: str,
+    call_date: date | None,
+    manager: str,
+    tl: str,
+    scores: dict[str, float | None],
+    check_date: date | None,
+    reviewer: str = VIP_JOURNAL_REVIEWER,
+    qa_comment: str = "",
+) -> dict[str, Any]:
+    fields = {
+        "client_id": _as_text_id(client_id),
+        "call_date": _as_sheet_date(call_date),
+        "manager": manager,
+        "tl": tl,
+        "contact": _score_cell(scores.get("contact")),
+        "friendly_development": _score_cell(scores.get("friendly_development")),
+        "personal_approach": _score_cell(scores.get("personal_approach")),
+        "call_to_action": _score_cell(scores.get("call_to_action")),
+        "bonus_offer": _score_cell(scores.get("bonus_offer")),
+        "prep": _score_cell(scores.get("prep")),
+        "closing": _score_cell(scores.get("closing")),
+        "ease": _score_cell(scores.get("ease")),
+        "reviewer": reviewer,
+        "check_date": _as_sheet_date(check_date),
+    }
+    comment = str(qa_comment or "").strip()
+    if comment:
+        fields["comment"] = comment
+    return fields
+
+
+def fields_to_letter_payload(
+    fields: dict[str, Any],
+    colmap: dict[str, str],
+) -> dict[str, Any]:
+    """field→value + field→letter → letter→value. Формулу total_score ніколи не пишемо."""
+    payload: dict[str, Any] = {}
+    for field, value in fields.items():
+        if field == "total_score":
+            continue
+        letter = colmap.get(field)
+        if not letter:
+            if field in {"comment", "tl", "reviewer", "check_date", "call_date"}:
+                continue
+            raise VipJournalError(f"У заголовках журналу немає колонки для поля «{field}».")
+        if value == "" or value is None:
+            continue
+        payload[letter] = value
+    # Захист: якщо мапа помилково вказала формулу — прибираємо
+    formula_letter = colmap.get("total_score")
+    if formula_letter:
+        payload.pop(formula_letter, None)
+    return payload
 
 
 def build_short_row_payload(
@@ -363,24 +615,19 @@ def build_short_row_payload(
     check_date: date | None,
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
+    colmap: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Короткий блок A:M. Не пишемо E (нова службова) і J (формула балу)."""
-    payload = {
-        "A": _as_text_id(client_id),
-        "B": _as_sheet_date(call_date),
-        "C": manager,
-        "D": tl,
-        "F": _score_cell(scores.get("contact")),
-        "G": _score_cell(scores.get("slip_handling")),
-        "H": _score_cell(scores.get("prep")),
-        "I": _score_cell(scores.get("closing")),
-        "K": reviewer,
-        "M": _as_sheet_date(check_date),
-    }
-    comment = str(qa_comment or "").strip()
-    if comment:
-        payload["L"] = comment
-    return payload
+    fields = build_short_field_values(
+        client_id=client_id,
+        call_date=call_date,
+        manager=manager,
+        tl=tl,
+        scores=scores,
+        check_date=check_date,
+        reviewer=reviewer,
+        qa_comment=qa_comment,
+    )
+    return fields_to_letter_payload(fields, colmap or _FALLBACK_SHORT_COLS)
 
 
 def build_friendly_row_payload(
@@ -393,28 +640,19 @@ def build_friendly_row_payload(
     check_date: date | None,
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
+    colmap: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Френдлі блок O:AD (+1 через колонку після TL). Не пишемо AA (формула балу)."""
-    payload = {
-        "O": _as_text_id(client_id),
-        "P": _as_sheet_date(call_date),
-        "Q": manager,
-        "R": tl,
-        "S": _score_cell(scores.get("contact")),
-        "T": _score_cell(scores.get("friendly_development")),
-        "U": _score_cell(scores.get("personal_approach")),
-        "V": _score_cell(scores.get("call_to_action")),
-        "W": _score_cell(scores.get("bonus_offer")),
-        "X": _score_cell(scores.get("prep")),
-        "Y": _score_cell(scores.get("closing")),
-        "Z": _score_cell(scores.get("ease")),
-        "AB": reviewer,
-        "AD": _as_sheet_date(check_date),
-    }
-    comment = str(qa_comment or "").strip()
-    if comment:
-        payload["AC"] = comment
-    return payload
+    fields = build_friendly_field_values(
+        client_id=client_id,
+        call_date=call_date,
+        manager=manager,
+        tl=tl,
+        scores=scores,
+        check_date=check_date,
+        reviewer=reviewer,
+        qa_comment=qa_comment,
+    )
+    return fields_to_letter_payload(fields, colmap or _FALLBACK_FRIENDLY_COLS)
 
 
 def _load_dedup_store() -> dict:
@@ -499,7 +737,7 @@ def _a1(col: str, row: int) -> str:
 
 
 def _write_cells(worksheet, row: int, payload: dict[str, Any]) -> None:
-    # Пишемо окремими діапазонами, щоб не чіпати формули I/Z і ручні K/AB.
+    # Окремі діапазони за літерами з мапи заголовків (формулу total_score у payload немає).
     data = [{"range": _a1(col, row), "values": [[value]]} for col, value in payload.items()]
     sheets_retry(
         worksheet.batch_update,
@@ -518,11 +756,6 @@ def _read_cells(worksheet, row: int, cols: list[str]) -> dict[str, str]:
             cell = str(block[0][0] if block[0] else "")
         out[col] = cell.strip()
     return out
-
-
-# Колонки, які Sheets часто переформатовує (дати) або де довгий текст
-# може відрізнятись пробілами/переносами — не валимо через них весь запис.
-_SOFT_VERIFY_COLS = frozenset({"B", "M", "P", "AD", "L", "AC", "K", "AB"})
 
 
 def _normalize_verify(value) -> str:
@@ -549,16 +782,31 @@ def _payload_matches(
             continue
         if strict_cols is not None and col not in strict_cols:
             continue
-        if strict_cols is None and col in _SOFT_VERIFY_COLS:
-            continue
         got = actual.get(col, "")
         if _normalize_verify(want) != _normalize_verify(got):
             return False
     return True
 
 
-def _strict_cols_for_payload(payload: dict[str, Any]) -> set[str]:
-    return {col for col in payload if col not in _SOFT_VERIFY_COLS}
+def _strict_cols_for_fields(fields: dict[str, Any], colmap: dict[str, str]) -> set[str]:
+    strict: set[str] = set()
+    for field, value in fields.items():
+        if value == "" or value is None:
+            continue
+        if field in _SOFT_FIELD_KEYS or field == "total_score":
+            continue
+        letter = colmap.get(field)
+        if letter:
+            strict.add(letter)
+    return strict
+
+
+def _col_letter_to_index(letter: str) -> int:
+    n = 0
+    for ch in str(letter or "").upper():
+        if "A" <= ch <= "Z":
+            n = n * 26 + (ord(ch) - 64)
+    return n
 
 
 def write_vip_journal_result(
@@ -627,43 +875,52 @@ def write_vip_journal_result(
         tl_name = clean_sheet_cell(manager_row.get("tl"))
 
         qa_comment = build_journal_qa_comment(call, verdict_data)
-        if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
-            scores = extract_short_scores(verdict_data)
-            payload = build_short_row_payload(
-                client_id=client_id,
-                call_date=call_date,
-                manager=manager_name,
-                tl=tl_name,
-                scores=scores,
-                check_date=check_date,
-                qa_comment=qa_comment,
-            )
-            id_col = "A"
-            verify_cols = list(payload.keys())
-        else:
-            scores = extract_friendly_scores(verdict_data)
-            payload = build_friendly_row_payload(
-                client_id=client_id,
-                call_date=call_date,
-                manager=manager_name,
-                tl=tl_name,
-                scores=scores,
-                check_date=check_date,
-                qa_comment=qa_comment,
-            )
-            id_col = "O"
-            verify_cols = list(payload.keys())
-
-        # Колонки зайнятості блоку (окрім нової E, формул J/AA і префілу АІ в K/AB).
-        if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
-            id_col_index, manager_col_index, score_col_index = 1, 3, 6  # A, C, F
-        else:
-            id_col_index, manager_col_index, score_col_index = 15, 17, 19  # O, Q, S
         start_row = int(route["start_row"])
-        strict_cols = _strict_cols_for_payload(payload)
 
         with _WRITE_LOCK:
             worksheet = _open_project_worksheet(google_client, route)
+            col_maps = load_journal_column_map(worksheet)
+            block_key = (
+                "short"
+                if call_type == VIP_JOURNAL_CALL_TYPE_SHORT
+                else "friendly"
+            )
+            colmap = col_maps[block_key]
+            if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+                scores = extract_short_scores(verdict_data)
+                fields = build_short_field_values(
+                    client_id=client_id,
+                    call_date=call_date,
+                    manager=manager_name,
+                    tl=tl_name,
+                    scores=scores,
+                    check_date=check_date,
+                    qa_comment=qa_comment,
+                )
+            else:
+                scores = extract_friendly_scores(verdict_data)
+                fields = build_friendly_field_values(
+                    client_id=client_id,
+                    call_date=call_date,
+                    manager=manager_name,
+                    tl=tl_name,
+                    scores=scores,
+                    check_date=check_date,
+                    qa_comment=qa_comment,
+                )
+            payload = fields_to_letter_payload(fields, colmap)
+            if not payload:
+                raise VipJournalError("Порожній payload для запису в журнал.")
+
+            id_col = colmap.get("client_id")
+            if not id_col:
+                raise VipJournalError("Не знайдено колонку ID клієнта в заголовках журналу.")
+            id_col_index = _col_letter_to_index(id_col)
+            manager_col_index = _col_letter_to_index(colmap.get("manager") or id_col)
+            score_col_index = _col_letter_to_index(colmap.get("contact") or id_col)
+            verify_cols = list(payload.keys())
+            strict_cols = _strict_cols_for_fields(fields, colmap)
+
             row = None
             last_verify_error = ""
             for attempt in range(3):
@@ -675,9 +932,18 @@ def write_vip_journal_result(
                     start_row=start_row if row is None else max(start_row, int(row) + 1),
                     extra_cols=[mgr_vals, score_vals],
                 )
-                # Атомарний запис усіх полів рядка (без I/Z), щоб не лишати «дірки»
-                # і зменшити шанс перезапису між резервом ID і рештою.
-                _write_cells(worksheet, candidate, payload)
+                # Пишемо лише колонки з мапи заголовків; формулу «Бал за дзвінок» пропускаємо.
+                try:
+                    _write_cells(worksheet, candidate, payload)
+                except Exception as write_exc:
+                    err_text = str(write_exc)
+                    if "protected" in err_text.lower() or "400" in err_text:
+                        raise VipJournalError(
+                            "Захищена комірка в журналі (ймовірно формула «Бал за дзвінок» "
+                            f"або зсув колонок). Деталі: {err_text}. "
+                            f"Мапа колонок {block_key}: {colmap}"
+                        ) from write_exc
+                    raise
                 actual = _read_cells(worksheet, candidate, verify_cols)
                 if _payload_matches(payload, actual, strict_cols=strict_cols):
                     row = candidate
@@ -687,17 +953,17 @@ def write_vip_journal_result(
                     f"{route['title']}/{call_type}, спроба {attempt + 1})."
                 )
                 logger.warning(
-                    "VIP journal verify mismatch analysis_id=%s row=%s attempt=%s actual=%s",
+                    "VIP journal verify mismatch analysis_id=%s row=%s attempt=%s actual=%s colmap=%s",
                     analysis_id,
                     candidate,
                     attempt + 1,
                     {k: actual.get(k) for k in sorted(strict_cols)},
+                    colmap,
                 )
-                # Якщо в рядку вже наш client_id — лишаємо запис як успішний soft-match.
                 if _normalize_verify(actual.get(id_col)) == _normalize_verify(payload.get(id_col)):
                     row = candidate
                     break
-                row = candidate  # наступна спроба піде нижче цього рядка
+                row = candidate
 
             if row is None:
                 raise VipJournalError(last_verify_error or "Не вдалося записати рядок журналу.")
