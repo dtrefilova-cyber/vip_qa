@@ -98,11 +98,11 @@ def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
         scores=scores,
         check_date=date(2026, 11, 10),
     )
-    assert payload["N"].startswith("'")
-    assert "Z" not in payload
-    assert "AB" not in payload
-    assert payload["AA"] == "АІ"
-    assert payload["Y"] == 7.5
+    assert payload["O"].startswith("'")
+    assert "E" not in payload
+    assert "AA" not in payload  # формула балу
+    assert payload["AB"] == "АІ"
+    assert payload["Z"] == 7.5
     assert sum(v for v in scores.values()) == 57.5
 
 
@@ -139,13 +139,15 @@ def test_short_payload_skips_formula_writes_result_comment():
         check_date=date(2026, 9, 2),
         qa_comment="— Встановлення контакту: 2.5/5 (Відсутній елемент привітання: ім'я клієнта)",
     )
-    assert "I" not in payload
-    assert "ім'я клієнта" in payload["K"]
-    assert payload["J"] == "АІ"
+    assert "E" not in payload  # нова колонка після TL
+    assert "J" not in payload  # формула балу
+    assert payload["F"] == 5.0
+    assert "ім'я клієнта" in payload["L"]
+    assert payload["K"] == "АІ"
     assert sum(v for v in scores.values()) == 30.0
 
 
-def test_friendly_payload_writes_result_comment_to_ab():
+def test_friendly_payload_writes_result_comment_to_ac():
     from datetime import date
 
     scores = {
@@ -167,8 +169,9 @@ def test_friendly_payload_writes_result_comment_to_ab():
         check_date=date(2026, 9, 2),
         qa_comment="— Завершення: 2.5/5 (Відсутній елемент завершення: прощання)",
     )
-    assert "Z" not in payload
-    assert "прощання" in payload["AB"]
+    assert "AA" not in payload
+    assert "прощання" in payload["AC"]
+    assert payload["AB"] == "АІ"
 
 
 def test_find_next_row_ignores_prefilled_below_gap():
@@ -191,17 +194,19 @@ def test_payload_matches_ignores_date_and_comment_drift():
         "A": "'100",
         "B": "10.11.2026",
         "C": "Менеджер",
-        "E": 5.0,
-        "K": "довгий коментар\nз переносом",
-        "J": "АІ",
+        "F": 5.0,
+        "L": "довгий коментар\nз переносом",
+        "K": "АІ",
+        "M": "11.11.2026",
     }
     actual = {
         "A": "100",
         "B": "2026-11-10",
         "C": "Менеджер",
-        "E": "5",
-        "K": "інший текст",
-        "J": "АІ",
+        "F": "5",
+        "L": "інший текст",
+        "K": "АІ",
+        "M": "2026-11-11",
     }
     strict = _strict_cols_for_payload(expected)
     assert _payload_matches(expected, actual, strict_cols=strict) is True

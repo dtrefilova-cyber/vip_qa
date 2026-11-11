@@ -1,7 +1,13 @@
 """Автозапис результатів VIP-аналізу в журнал за проєктом (Betking / 777 / Vegas).
 
-Короткі → A:L (без I — формула, без K — ручний QA).
-Френдлі → N:AC (без Z — формула, без AB — ручний QA).
+Після додавання колонки справа від TL (зсув з E):
+
+Короткі → A:M
+  A ID, B дата, C менеджер, D TL, E службова (не пишемо),
+  F–I бали, J формула «Бал» (не пишемо), K перевіряючий, L коментар, M дата перевірки.
+
+Френдлі → O:AD (блок зсунуто на +1 через insert після D)
+  O ID … R TL, S–Z бали, AA формула (не пишемо), AB перевіряючий, AC коментар, AD дата перевірки.
 """
 
 from __future__ import annotations
@@ -340,7 +346,7 @@ def find_next_journal_row(
 
 
 def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None = None) -> str:
-    """Коментар у K/AB: розбір результатів аналізу (критерії + конкретні причини), не ручне поле картки."""
+    """Коментар у L/AC: розбір результатів аналізу (критерії + конкретні причини)."""
     _ = call
     from google_sheets import format_vip_score_comment_for_sheet
 
@@ -358,22 +364,22 @@ def build_short_row_payload(
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки короткого блоку без I (формула). K — коментар по результатах аналізу."""
+    """Короткий блок A:M. Не пишемо E (нова службова) і J (формула балу)."""
     payload = {
         "A": _as_text_id(client_id),
         "B": _as_sheet_date(call_date),
         "C": manager,
         "D": tl,
-        "E": _score_cell(scores.get("contact")),
-        "F": _score_cell(scores.get("slip_handling")),
-        "G": _score_cell(scores.get("prep")),
-        "H": _score_cell(scores.get("closing")),
-        "J": reviewer,
-        "L": _as_sheet_date(check_date),
+        "F": _score_cell(scores.get("contact")),
+        "G": _score_cell(scores.get("slip_handling")),
+        "H": _score_cell(scores.get("prep")),
+        "I": _score_cell(scores.get("closing")),
+        "K": reviewer,
+        "M": _as_sheet_date(check_date),
     }
     comment = str(qa_comment or "").strip()
     if comment:
-        payload["K"] = comment
+        payload["L"] = comment
     return payload
 
 
@@ -388,26 +394,26 @@ def build_friendly_row_payload(
     reviewer: str = VIP_JOURNAL_REVIEWER,
     qa_comment: str = "",
 ) -> dict[str, Any]:
-    """Клітинки френдлі блоку без Z (формула). AB — коментар по результатах аналізу."""
+    """Френдлі блок O:AD (+1 через колонку після TL). Не пишемо AA (формула балу)."""
     payload = {
-        "N": _as_text_id(client_id),
-        "O": _as_sheet_date(call_date),
-        "P": manager,
-        "Q": tl,
-        "R": _score_cell(scores.get("contact")),
-        "S": _score_cell(scores.get("friendly_development")),
-        "T": _score_cell(scores.get("personal_approach")),
-        "U": _score_cell(scores.get("call_to_action")),
-        "V": _score_cell(scores.get("bonus_offer")),
-        "W": _score_cell(scores.get("prep")),
-        "X": _score_cell(scores.get("closing")),
-        "Y": _score_cell(scores.get("ease")),
-        "AA": reviewer,
-        "AC": _as_sheet_date(check_date),
+        "O": _as_text_id(client_id),
+        "P": _as_sheet_date(call_date),
+        "Q": manager,
+        "R": tl,
+        "S": _score_cell(scores.get("contact")),
+        "T": _score_cell(scores.get("friendly_development")),
+        "U": _score_cell(scores.get("personal_approach")),
+        "V": _score_cell(scores.get("call_to_action")),
+        "W": _score_cell(scores.get("bonus_offer")),
+        "X": _score_cell(scores.get("prep")),
+        "Y": _score_cell(scores.get("closing")),
+        "Z": _score_cell(scores.get("ease")),
+        "AB": reviewer,
+        "AD": _as_sheet_date(check_date),
     }
     comment = str(qa_comment or "").strip()
     if comment:
-        payload["AB"] = comment
+        payload["AC"] = comment
     return payload
 
 
@@ -516,7 +522,7 @@ def _read_cells(worksheet, row: int, cols: list[str]) -> dict[str, str]:
 
 # Колонки, які Sheets часто переформатовує (дати) або де довгий текст
 # може відрізнятись пробілами/переносами — не валимо через них весь запис.
-_SOFT_VERIFY_COLS = frozenset({"B", "L", "O", "AC", "K", "AB", "J", "AA"})
+_SOFT_VERIFY_COLS = frozenset({"B", "M", "P", "AD", "L", "AC", "K", "AB"})
 
 
 def _normalize_verify(value) -> str:
@@ -645,14 +651,14 @@ def write_vip_journal_result(
                 check_date=check_date,
                 qa_comment=qa_comment,
             )
-            id_col = "N"
+            id_col = "O"
             verify_cols = list(payload.keys())
 
-        # Колонки зайнятості блоку (окрім формул I/Z і префілу АІ в J/AA).
+        # Колонки зайнятості блоку (окрім нової E, формул J/AA і префілу АІ в K/AB).
         if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
-            id_col_index, manager_col_index, score_col_index = 1, 3, 5  # A, C, E
+            id_col_index, manager_col_index, score_col_index = 1, 3, 6  # A, C, F
         else:
-            id_col_index, manager_col_index, score_col_index = 14, 16, 18  # N, P, R
+            id_col_index, manager_col_index, score_col_index = 15, 17, 19  # O, Q, S
         start_row = int(route["start_row"])
         strict_cols = _strict_cols_for_payload(payload)
 

@@ -242,7 +242,7 @@ def _write_result_to_sheet(call, verdict_data) -> bool:
 
 
 def _write_journal_safe(call, verdict_data) -> dict:
-    """Запис у журнал Betking/777/Vegas (A:L або N:AC). Один повтор при збої API."""
+    """Запис у журнал Betking/777/Vegas (A:M або O:AD). Один повтор при збої API."""
     last: dict = {"ok": False, "status": "Помилка запису"}
     for attempt in range(2):
         try:
