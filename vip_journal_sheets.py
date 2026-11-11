@@ -121,7 +121,11 @@ def resolve_project_route(project: str | None) -> dict:
 
 
 def make_analysis_id(call: dict, call_type: str) -> str:
-    """Стабільний id для дедупу повторної доставки (не client_id)."""
+    """Стабільний id для дедупу повторної доставки тієї ж картки.
+
+    card_id входить у хеш, щоб два різні дзвінки в одній черзі ніколи не зливались
+    навіть при однаковому client_id/даті/менеджері.
+    """
     payload = "|".join(
         [
             str(call.get("url") or "").strip(),
@@ -130,6 +134,7 @@ def make_analysis_id(call: dict, call_type: str) -> str:
             str(call_type or "").strip(),
             str(call.get("check_date") or call.get("listen_date") or "").strip(),
             str(call.get("ret_manager") or call.get("manager") or "").strip(),
+            str(call.get("card_id") or call.get("_card_id") or "").strip(),
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
@@ -299,17 +304,37 @@ def resolve_manager_from_directory(
     return matches[0]
 
 
+def _cell_filled(value) -> bool:
+    return bool(str(value or "").strip())
+
+
 def find_next_journal_row(
     col_values: list,
     *,
     start_row: int,
+    extra_cols: list[list] | None = None,
 ) -> int:
-    """Вільний рядок блоку: зайнятий лише якщо є ID клієнта (ключ блоку)."""
+    """Вільний рядок блоку.
+
+    Рядок зайнятий, якщо заповнений ID клієнта або будь-яка з додаткових
+    ключових колонок блоку (менеджер / бал контакту) — щоб не перезаписати
+    попередній запис, навіть якщо ID ще не встиг «проявитись» у кеші.
+    Формули підсумку та префіл «АІ» сюди не передаємо.
+    """
     idx = max(start_row, 1) - 1
     values = list(col_values or [])
-    while idx < len(values):
-        if not str(values[idx] or "").strip():
-            return idx + 1
+    extras = [list(col or []) for col in (extra_cols or [])]
+    max_len = max([len(values), *(len(col) for col in extras)], default=0)
+    max_len = max(max_len, idx + 1)
+    while idx < max_len:
+        if not _cell_filled(values[idx] if idx < len(values) else ""):
+            occupied_extra = False
+            for col in extras:
+                if idx < len(col) and _cell_filled(col[idx]):
+                    occupied_extra = True
+                    break
+            if not occupied_extra:
+                return idx + 1
         idx += 1
     return idx + 1
 
@@ -489,6 +514,11 @@ def _read_cells(worksheet, row: int, cols: list[str]) -> dict[str, str]:
     return out
 
 
+# Колонки, які Sheets часто переформатовує (дати) або де довгий текст
+# може відрізнятись пробілами/переносами — не валимо через них весь запис.
+_SOFT_VERIFY_COLS = frozenset({"B", "L", "O", "AC", "K", "AB", "J", "AA"})
+
+
 def _normalize_verify(value) -> str:
     text = str(value or "").strip()
     if text.startswith("'"):
@@ -498,17 +528,31 @@ def _normalize_verify(value) -> str:
         num = float(text.replace(",", "."))
         return f"{num:g}"
     except ValueError:
-        return text.casefold()
+        return " ".join(text.casefold().replace("\r\n", "\n").split())
 
 
-def _payload_matches(expected: dict[str, Any], actual: dict[str, str]) -> bool:
+def _payload_matches(
+    expected: dict[str, Any],
+    actual: dict[str, str],
+    *,
+    strict_cols: set[str] | None = None,
+) -> bool:
+    """Перевірка ключових полів. Дати/коментар — soft (не блокують успіх)."""
     for col, want in expected.items():
         if want == "" or want is None:
+            continue
+        if strict_cols is not None and col not in strict_cols:
+            continue
+        if strict_cols is None and col in _SOFT_VERIFY_COLS:
             continue
         got = actual.get(col, "")
         if _normalize_verify(want) != _normalize_verify(got):
             return False
     return True
+
+
+def _strict_cols_for_payload(payload: dict[str, Any]) -> set[str]:
+    return {col for col in payload if col not in _SOFT_VERIFY_COLS}
 
 
 def write_vip_journal_result(
@@ -604,41 +648,53 @@ def write_vip_journal_result(
             id_col = "N"
             verify_cols = list(payload.keys())
 
+        # Колонки зайнятості блоку (окрім формул I/Z і префілу АІ в J/AA).
+        if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+            id_col_index, manager_col_index, score_col_index = 1, 3, 5  # A, C, E
+        else:
+            id_col_index, manager_col_index, score_col_index = 14, 16, 18  # N, P, R
+        start_row = int(route["start_row"])
+        strict_cols = _strict_cols_for_payload(payload)
+
         with _WRITE_LOCK:
             worksheet = _open_project_worksheet(google_client, route)
-            # Колонка ID клієнта: A=1, N=14
-            id_col_index = 1 if id_col == "A" else 14
-            col_values = sheets_retry(worksheet.col_values, id_col_index)
-            row = find_next_journal_row(col_values, start_row=int(route["start_row"]))
-
-            # Резерв рядка: спочатку ID, щоб паралельний запуск не взяв той самий.
-            sheets_retry(
-                worksheet.update,
-                range_name=_a1(id_col, row),
-                values=[[payload[id_col]]],
-                value_input_option="USER_ENTERED",
-            )
-            # Перевірка резерву
-            reserved = sheets_retry(worksheet.acell, _a1(id_col, row)).value
-            if _normalize_verify(reserved) != _normalize_verify(payload[id_col]):
-                # Хтось перехопив — шукаємо далі
-                col_values = sheets_retry(worksheet.col_values, id_col_index)
-                row = find_next_journal_row(col_values, start_row=int(route["start_row"]))
-                sheets_retry(
-                    worksheet.update,
-                    range_name=_a1(id_col, row),
-                    values=[[payload[id_col]]],
-                    value_input_option="USER_ENTERED",
+            row = None
+            last_verify_error = ""
+            for attempt in range(3):
+                id_vals = sheets_retry(worksheet.col_values, id_col_index)
+                mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
+                score_vals = sheets_retry(worksheet.col_values, score_col_index)
+                candidate = find_next_journal_row(
+                    id_vals,
+                    start_row=start_row if row is None else max(start_row, int(row) + 1),
+                    extra_cols=[mgr_vals, score_vals],
                 )
-
-            rest = {k: v for k, v in payload.items() if k != id_col}
-            _write_cells(worksheet, row, rest)
-
-            actual = _read_cells(worksheet, row, verify_cols)
-            if not _payload_matches(payload, actual):
-                raise VipJournalError(
-                    f"Верифікація запису не пройшла (рядок {row}, {route['title']}/{call_type})."
+                # Атомарний запис усіх полів рядка (без I/Z), щоб не лишати «дірки»
+                # і зменшити шанс перезапису між резервом ID і рештою.
+                _write_cells(worksheet, candidate, payload)
+                actual = _read_cells(worksheet, candidate, verify_cols)
+                if _payload_matches(payload, actual, strict_cols=strict_cols):
+                    row = candidate
+                    break
+                last_verify_error = (
+                    f"Верифікація запису не пройшла (рядок {candidate}, "
+                    f"{route['title']}/{call_type}, спроба {attempt + 1})."
                 )
+                logger.warning(
+                    "VIP journal verify mismatch analysis_id=%s row=%s attempt=%s actual=%s",
+                    analysis_id,
+                    candidate,
+                    attempt + 1,
+                    {k: actual.get(k) for k in sorted(strict_cols)},
+                )
+                # Якщо в рядку вже наш client_id — лишаємо запис як успішний soft-match.
+                if _normalize_verify(actual.get(id_col)) == _normalize_verify(payload.get(id_col)):
+                    row = candidate
+                    break
+                row = candidate  # наступна спроба піде нижче цього рядка
+
+            if row is None:
+                raise VipJournalError(last_verify_error or "Не вдалося записати рядок журналу.")
 
             mapping = {
                 "spreadsheet_id": VIP_JOURNAL_SHEET_ID,

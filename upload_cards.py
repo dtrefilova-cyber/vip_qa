@@ -197,6 +197,7 @@ def enqueue_card(
     st.session_state[keys["pending"]] = pending
 
     call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+    call["card_id"] = int(card_id)
     if check_date is not None:
         call["check_date"] = format_check_date(check_date)
     queued = dict(st.session_state.get(keys["queued"]) or {})

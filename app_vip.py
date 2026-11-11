@@ -242,16 +242,24 @@ def _write_result_to_sheet(call, verdict_data) -> bool:
 
 
 def _write_journal_safe(call, verdict_data) -> dict:
-    """Запис у журнал Betking/777/Vegas (A:L або N:AC). Повертає статус write_vip_journal_result."""
-    try:
-        gclient = connect_google()
-        result = write_vip_journal_result(gclient, call, verdict_data)
-        if not result.get("ok"):
-            logger.error("VIP journal write failed: %s", result.get("error"))
-        return result
-    except Exception as exc:
-        logger.exception("VIP journal write failed")
-        return {"ok": False, "error": str(exc), "status": "Помилка запису"}
+    """Запис у журнал Betking/777/Vegas (A:L або N:AC). Один повтор при збої API."""
+    last: dict = {"ok": False, "status": "Помилка запису"}
+    for attempt in range(2):
+        try:
+            gclient = connect_google()
+            result = write_vip_journal_result(gclient, call, verdict_data)
+            if result.get("ok"):
+                return result
+            last = result
+            logger.error(
+                "VIP journal write failed attempt=%s: %s",
+                attempt + 1,
+                result.get("error"),
+            )
+        except Exception as exc:
+            logger.exception("VIP journal write failed attempt=%s", attempt + 1)
+            last = {"ok": False, "error": str(exc), "status": "Помилка запису"}
+    return last
 
 
 def _user_safe_analysis_error(exc: BaseException) -> str:
@@ -466,6 +474,7 @@ def _process_pending(
         call = pop_queued_call(call_type, card_id)
         if not call:
             call = collect_card_call(card_id, managers_config, qa_manager, call_type=call_type)
+        call["card_id"] = int(card_id)
         if check_date is not None:
             call["check_date"] = format_check_date(check_date)
         results_state.pop(card_id - 1, None)

@@ -176,6 +176,36 @@ def test_find_next_row_ignores_prefilled_below_gap():
     assert find_next_journal_row(col, start_row=3) == 4
 
 
+def test_find_next_row_skips_row_with_manager_but_empty_id():
+    # ID порожній, але менеджер уже є — рядок зайнятий (захист від перезапису)
+    ids = ["", "", "", ""]
+    managers = ["", "", "Іваненко", ""]
+    assert find_next_journal_row(ids, start_row=3, extra_cols=[managers]) == 4
+
+
+def test_payload_matches_ignores_date_and_comment_drift():
+    from vip_journal_sheets import _payload_matches, _strict_cols_for_payload
+
+    expected = {
+        "A": "'100",
+        "B": "10.11.2026",
+        "C": "Менеджер",
+        "E": 5.0,
+        "K": "довгий коментар\nз переносом",
+        "J": "АІ",
+    }
+    actual = {
+        "A": "100",
+        "B": "2026-11-10",
+        "C": "Менеджер",
+        "E": "5",
+        "K": "інший текст",
+        "J": "АІ",
+    }
+    strict = _strict_cols_for_payload(expected)
+    assert _payload_matches(expected, actual, strict_cols=strict) is True
+
+
 def test_manager_lookup_by_project_and_login():
     managers = parse_journal_managers(
         [
@@ -201,8 +231,22 @@ def test_analysis_id_stable_for_retry():
         "call_date": "01.09.2026",
         "check_date": "10.11.2026",
         "ret_manager": "A",
+        "card_id": 1,
     }
     a = make_analysis_id(call, "short")
     b = make_analysis_id(dict(call), "short")
     assert a == b
     assert make_analysis_id(call, "friendly") != a
+
+
+def test_analysis_id_differs_for_different_cards():
+    base = {
+        "url": "https://same",
+        "client_id": "1",
+        "call_date": "01.09.2026",
+        "check_date": "10.11.2026",
+        "ret_manager": "A",
+    }
+    a = make_analysis_id({**base, "card_id": 1}, "short")
+    b = make_analysis_id({**base, "card_id": 2}, "short")
+    assert a != b
