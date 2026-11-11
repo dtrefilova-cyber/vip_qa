@@ -100,12 +100,11 @@ def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
         check_date=date(2026, 11, 10),
     )
     assert payload["O"].startswith("'")
-    assert "S" not in payload  # нова колонка після TL
-    assert "AB" not in payload  # формула балу
-    assert payload["AC"] == "АІ"
-    assert payload["T"] == 5.0
-    assert payload["AA"] == 7.5  # невимушеність
-    assert payload["Z"] == 5.0  # завершення
+    assert "AA" not in payload  # формула балу (1 insert після TL)
+    assert payload["AB"] == "АІ"
+    assert payload["S"] == 5.0  # контакт
+    assert payload["Z"] == 7.5  # невимушеність
+    assert payload["Y"] == 5.0  # завершення
     assert sum(v for v in scores.values()) == 57.5
 
 
@@ -150,7 +149,7 @@ def test_short_payload_skips_formula_writes_result_comment():
     assert sum(v for v in scores.values()) == 30.0
 
 
-def test_friendly_payload_writes_result_comment_to_ad():
+def test_friendly_payload_writes_result_comment_to_ac():
     from datetime import date
 
     scores = {
@@ -172,9 +171,37 @@ def test_friendly_payload_writes_result_comment_to_ad():
         check_date=date(2026, 9, 2),
         qa_comment="— Завершення: 2.5/5 (Відсутній елемент завершення: прощання)",
     )
-    assert "AB" not in payload  # формула
-    assert "прощання" in payload["AD"]
-    assert payload["AC"] == "АІ"
+    assert "AA" not in payload  # формула
+    assert "прощання" in payload["AC"]
+    assert payload["AB"] == "АІ"
+
+
+def test_discover_one_insert_friendly_formula_at_aa():
+    headers = [[
+        "ID клієнта", "Дата дзвінка", "ПІБ менеджера VIP", "TL", "Нова",
+        "Встановлення контакту", "Робота зі зливом", "P.R.E.P", "Завершення",
+        "Бал за дзвінок", "Перевіряючий", "Коментар QA", "Дата перевірки", "",
+        "ID клієнта", "Дата дзвінка", "ПІБ менеджера VIP", "TL",
+        "Встановлення контакту", "Розвиток френдлі", "Індивідуальний підхід",
+        "Заклик до гри", "Пропозиція бонусів", "P.R.E.P", "Завершення",
+        "Невимушеність", "Бал за дзвінок", "Перевіряючий", "Коментар QA",
+        "Дата перевірки",
+    ]]
+    mapping = discover_journal_columns(headers)
+    assert mapping["friendly"]["contact"] == "S"
+    assert mapping["friendly"]["ease"] == "Z"
+    assert mapping["friendly"]["total_score"] == "AA"
+    assert mapping["friendly"]["reviewer"] == "AB"
+    assert "AA" in mapping["skip"]
+
+
+def test_parse_protected_data_index():
+    from vip_journal_sheets import _parse_protected_data_index
+
+    err = Exception(
+        "APIError: [400]: Invalid data[12]: You are trying to edit a protected cell"
+    )
+    assert _parse_protected_data_index(err) == 12
 
 
 def test_find_next_row_ignores_prefilled_below_gap():

@@ -62,7 +62,9 @@ _HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
 
 _SOFT_FIELD_KEYS = frozenset({"call_date", "check_date", "comment", "reviewer"})
 
-# Fallback після колонки справа від TL у обох блоках (short A:M, friendly O:AE).
+# Fallback після ОДНІЄЇ колонки справа від TL (зсув усього аркуша +1):
+# short A:M (E службова, J формула), friendly O:AD (AA формула).
+# Якщо в friendly теж вставлено колонку після TL — спрацьовує discover за заголовками.
 _FALLBACK_SHORT_COLS = {
     "client_id": "A",
     "call_date": "B",
@@ -72,6 +74,7 @@ _FALLBACK_SHORT_COLS = {
     "slip_handling": "G",
     "prep": "H",
     "closing": "I",
+    "total_score": "J",
     "reviewer": "K",
     "comment": "L",
     "check_date": "M",
@@ -81,18 +84,21 @@ _FALLBACK_FRIENDLY_COLS = {
     "call_date": "P",
     "manager": "Q",
     "tl": "R",
-    "contact": "T",
-    "friendly_development": "U",
-    "personal_approach": "V",
-    "call_to_action": "W",
-    "bonus_offer": "X",
-    "prep": "Y",
-    "closing": "Z",
-    "ease": "AA",
-    "reviewer": "AC",
-    "comment": "AD",
-    "check_date": "AE",
+    "contact": "S",
+    "friendly_development": "T",
+    "personal_approach": "U",
+    "call_to_action": "V",
+    "bonus_offer": "W",
+    "prep": "X",
+    "closing": "Y",
+    "ease": "Z",
+    "total_score": "AA",
+    "reviewer": "AB",
+    "comment": "AC",
+    "check_date": "AD",
 }
+# Кандидати формули балу для обох розкладок (1 або 2 insert після TL) — ніколи не пишемо.
+_FORMULA_LETTER_CANDIDATES = frozenset({"I", "J", "Z", "AA", "AB"})
 
 # Допустимі бали за ТЗ (роздільник у Sheets — числовий float).
 _ALLOWED_SHORT = {
@@ -477,23 +483,36 @@ def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str
         else:
             friendly.setdefault(field, letter)
 
-    short_required = ("client_id", "manager", "contact", "closing", "reviewer", "check_date")
-    friendly_required = (
-        "client_id",
-        "manager",
-        "contact",
-        "ease",
-        "closing",
-        "reviewer",
-        "check_date",
-    )
-    if not all(k in short for k in short_required):
+    # Повний fallback лише коли блок майже не розпізнався — інакше зсув літер гірший за відсутнє поле.
+    if not all(k in short for k in ("client_id", "manager", "contact")):
         logger.warning("VIP journal short headers incomplete; using fallback letters")
         short = dict(_FALLBACK_SHORT_COLS)
-    if not all(k in friendly for k in friendly_required):
+    if not all(k in friendly for k in ("client_id", "manager", "contact", "ease")):
         logger.warning("VIP journal friendly headers incomplete; using fallback letters")
         friendly = dict(_FALLBACK_FRIENDLY_COLS)
-    return {"short": short, "friendly": friendly}
+
+    skip = {
+        letter
+        for letter in (
+            short.get("total_score"),
+            friendly.get("total_score"),
+            *_FORMULA_LETTER_CANDIDATES,
+        )
+        if letter
+    }
+    # Приберімо з skip літери, які точно є score/meta в розпізнаній мапі (не формула).
+    writable = set()
+    for block in (short, friendly):
+        for field, letter in block.items():
+            if field != "total_score" and letter:
+                writable.add(letter)
+    skip -= writable
+    # Формулу з заголовка завжди лишаємо в skip.
+    for block in (short, friendly):
+        formula = block.get("total_score")
+        if formula:
+            skip.add(formula)
+    return {"short": short, "friendly": friendly, "skip": skip}
 
 
 def load_journal_column_map(worksheet) -> dict[str, dict[str, str]]:
@@ -584,9 +603,23 @@ def build_friendly_field_values(
 def fields_to_letter_payload(
     fields: dict[str, Any],
     colmap: dict[str, str],
+    *,
+    skip_letters: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """field→value + field→letter → letter→value. Формулу total_score ніколи не пишемо."""
     payload: dict[str, Any] = {}
+    banned = set(skip_letters or ())
+    formula_letter = colmap.get("total_score")
+    if formula_letter:
+        banned.add(formula_letter)
+    banned.update(_FORMULA_LETTER_CANDIDATES)
+    # Не банити літери, які в цій мапі точно не формула.
+    for field, letter in colmap.items():
+        if field != "total_score" and letter:
+            banned.discard(letter)
+    if formula_letter:
+        banned.add(formula_letter)
+
     for field, value in fields.items():
         if field == "total_score":
             continue
@@ -595,13 +628,13 @@ def fields_to_letter_payload(
             if field in {"comment", "tl", "reviewer", "check_date", "call_date"}:
                 continue
             raise VipJournalError(f"У заголовках журналу немає колонки для поля «{field}».")
+        if letter in banned:
+            continue
         if value == "" or value is None:
             continue
         payload[letter] = value
-    # Захист: якщо мапа помилково вказала формулу — прибираємо
-    formula_letter = colmap.get("total_score")
-    if formula_letter:
-        payload.pop(formula_letter, None)
+    for letter in banned:
+        payload.pop(letter, None)
     return payload
 
 
@@ -627,7 +660,8 @@ def build_short_row_payload(
         reviewer=reviewer,
         qa_comment=qa_comment,
     )
-    return fields_to_letter_payload(fields, colmap or _FALLBACK_SHORT_COLS)
+    mapping = colmap or _FALLBACK_SHORT_COLS
+    return fields_to_letter_payload(fields, mapping)
 
 
 def build_friendly_row_payload(
@@ -652,7 +686,8 @@ def build_friendly_row_payload(
         reviewer=reviewer,
         qa_comment=qa_comment,
     )
-    return fields_to_letter_payload(fields, colmap or _FALLBACK_FRIENDLY_COLS)
+    mapping = colmap or _FALLBACK_FRIENDLY_COLS
+    return fields_to_letter_payload(fields, mapping)
 
 
 def _load_dedup_store() -> dict:
@@ -736,9 +771,23 @@ def _a1(col: str, row: int) -> str:
     return f"{col}{row}"
 
 
+def _parse_protected_data_index(exc: BaseException) -> int | None:
+    """APIError … Invalid data[N]: protected cell → N."""
+    import re
+
+    match = re.search(r"Invalid data\[(\d+)\]", str(exc), flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
 def _write_cells(worksheet, row: int, payload: dict[str, Any]) -> None:
-    # Окремі діапазони за літерами з мапи заголовків (формулу total_score у payload немає).
     data = [{"range": _a1(col, row), "values": [[value]]} for col, value in payload.items()]
+    if not data:
+        return
     sheets_retry(
         worksheet.batch_update,
         data,
@@ -746,9 +795,80 @@ def _write_cells(worksheet, row: int, payload: dict[str, Any]) -> None:
     )
 
 
-def _read_cells(worksheet, row: int, cols: list[str]) -> dict[str, str]:
+def _drop_formula_cells(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """Прибирає комірки, де вже стоїть формула (=…), щоб не бити захист «Бал за дзвінок»."""
+    if not payload:
+        return payload
+    cols = list(payload.keys())
+    try:
+        existing = _read_cells(worksheet, row, cols, formulas=True)
+    except Exception:
+        logger.debug("VIP journal formula probe failed row=%s", row, exc_info=True)
+        return dict(payload)
+    cleaned: dict[str, Any] = {}
+    for col, value in payload.items():
+        cell = str(existing.get(col) or "").strip()
+        if cell.startswith("="):
+            logger.warning(
+                "VIP journal skip formula cell %s%d (value starts with =)",
+                col,
+                row,
+            )
+            continue
+        cleaned[col] = value
+    return cleaned
+
+
+def _write_cells_resilient(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """Пише payload; protected-комірки викидає й повторює, щоб бали все одно потрапили в журнал."""
+    pending = _drop_formula_cells(worksheet, row, dict(payload))
+    skipped: list[str] = []
+    while pending:
+        try:
+            _write_cells(worksheet, row, pending)
+            if skipped:
+                logger.warning(
+                    "VIP journal wrote row=%s after skipping protected cols=%s",
+                    row,
+                    skipped,
+                )
+            return pending
+        except Exception as exc:
+            err = str(exc)
+            if "protected" not in err.lower():
+                raise
+            idx = _parse_protected_data_index(exc)
+            keys = list(pending.keys())
+            if idx is None or idx < 0 or idx >= len(keys):
+                raise
+            bad = keys[idx]
+            skipped.append(bad)
+            logger.warning(
+                "VIP journal protected cell %s%d (data[%s]) — skip and retry",
+                bad,
+                row,
+                idx,
+            )
+            pending.pop(bad, None)
+    raise VipJournalError(
+        "Усі комірки запису захищені; не вдалося записати рядок журналу."
+    )
+
+
+def _read_cells(
+    worksheet,
+    row: int,
+    cols: list[str],
+    *,
+    formulas: bool = False,
+) -> dict[str, str]:
     ranges = [_a1(c, row) for c in cols]
-    result = sheets_retry(worksheet.batch_get, ranges)
+    if formulas:
+        result = sheets_retry(
+            worksheet.batch_get, ranges, value_render_option="FORMULA"
+        )
+    else:
+        result = sheets_retry(worksheet.batch_get, ranges)
     out: dict[str, str] = {}
     for col, block in zip(cols, result):
         cell = ""
@@ -886,6 +1006,7 @@ def write_vip_journal_result(
                 else "friendly"
             )
             colmap = col_maps[block_key]
+            skip_letters = set(col_maps.get("skip") or ())
             if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
                 scores = extract_short_scores(verdict_data)
                 fields = build_short_field_values(
@@ -908,7 +1029,9 @@ def write_vip_journal_result(
                     check_date=check_date,
                     qa_comment=qa_comment,
                 )
-            payload = fields_to_letter_payload(fields, colmap)
+            payload = fields_to_letter_payload(
+                fields, colmap, skip_letters=skip_letters
+            )
             if not payload:
                 raise VipJournalError("Порожній payload для запису в журнал.")
 
@@ -918,11 +1041,11 @@ def write_vip_journal_result(
             id_col_index = _col_letter_to_index(id_col)
             manager_col_index = _col_letter_to_index(colmap.get("manager") or id_col)
             score_col_index = _col_letter_to_index(colmap.get("contact") or id_col)
-            verify_cols = list(payload.keys())
             strict_cols = _strict_cols_for_fields(fields, colmap)
 
             row = None
             last_verify_error = ""
+            written_payload = payload
             for attempt in range(3):
                 id_vals = sheets_retry(worksheet.col_values, id_col_index)
                 mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
@@ -932,20 +1055,14 @@ def write_vip_journal_result(
                     start_row=start_row if row is None else max(start_row, int(row) + 1),
                     extra_cols=[mgr_vals, score_vals],
                 )
-                # Пишемо лише колонки з мапи заголовків; формулу «Бал за дзвінок» пропускаємо.
-                try:
-                    _write_cells(worksheet, candidate, payload)
-                except Exception as write_exc:
-                    err_text = str(write_exc)
-                    if "protected" in err_text.lower() or "400" in err_text:
-                        raise VipJournalError(
-                            "Захищена комірка в журналі (ймовірно формула «Бал за дзвінок» "
-                            f"або зсув колонок). Деталі: {err_text}. "
-                            f"Мапа колонок {block_key}: {colmap}"
-                        ) from write_exc
-                    raise
+                # Формули / protected клітинки пропускаємо; бали й метадані все одно пишемо.
+                written_payload = _write_cells_resilient(worksheet, candidate, payload)
+                verify_cols = list(written_payload.keys())
+                written_strict = {c for c in strict_cols if c in written_payload}
                 actual = _read_cells(worksheet, candidate, verify_cols)
-                if _payload_matches(payload, actual, strict_cols=strict_cols):
+                if _payload_matches(
+                    written_payload, actual, strict_cols=written_strict or None
+                ):
                     row = candidate
                     break
                 last_verify_error = (
@@ -957,10 +1074,12 @@ def write_vip_journal_result(
                     analysis_id,
                     candidate,
                     attempt + 1,
-                    {k: actual.get(k) for k in sorted(strict_cols)},
+                    {k: actual.get(k) for k in sorted(written_strict)},
                     colmap,
                 )
-                if _normalize_verify(actual.get(id_col)) == _normalize_verify(payload.get(id_col)):
+                if _normalize_verify(actual.get(id_col)) == _normalize_verify(
+                    written_payload.get(id_col)
+                ):
                     row = candidate
                     break
                 row = candidate
