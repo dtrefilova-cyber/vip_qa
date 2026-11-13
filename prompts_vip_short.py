@@ -149,7 +149,7 @@ contact:
 - greeting_quote, client_name_quote, project_quote, availability_quote, manager_name_quote — дослівна цитата з таймкодом. Немає елемента — порожній рядок, не вигадуй.
 - exception_number_signed — у "Важливому", коментарі QA або чекбоксі сказано, що номер підписаний / підписав / клієнт бачить, хто дзвонить.
 - exception_prior_messenger_contact — у коментарі до дзвінка або у "Важливому" є месенджер (Viber, Telegram, WhatsApp). Тоді коротке представлення лише на ім'я — повний бал контакту, назва проєкту не обов'язкова. Став true.
-- exception_client_recognized_manager — клієнт сам назвав менеджера на ім'я або сказав "а, це ви".
+- exception_client_recognized_manager — клієнт сам назвав менеджера на ім'я або сказав "а, це ви". Якщо клієнт звертається до менеджера на ім'я, «Встановлення контакту» виконано: не знижуй бал на 2,5 і постав exception_client_recognized_manager=true.
 - exception_client_interrupted_intro — клієнт перебив представлення.
 - exception_answered_question_then_finished_intro — менеджер відповів на питання і далі договорив представлення.
 
@@ -207,6 +207,7 @@ def get_vip_contact_prompt() -> str:
 
 Елементи Д11: привітання, ім'я клієнта, проєкт (777 / Betking / Vegas), перевірка зручності («Вам зручно?», «Є хвилинка?», «Є час?»).
 manager_name_quote — менеджер назвав себе («мене звати», «я ваш менеджер»).
+Якщо клієнт звертається до менеджера на ім'я, «Встановлення контакту» виконано: не знижуй бал на 2,5 і постав exception_client_recognized_manager=true.
 
 {
   "contact": {
@@ -220,6 +221,7 @@ manager_name_quote — менеджер назвав себе («мене зва
     "availability_quote": "",
     "manager_introduced_self": bool,
     "manager_name_quote": "",
+    "exception_client_recognized_manager": bool,
     "availability_check_relevant": true
   }
 }
