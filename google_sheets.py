@@ -292,16 +292,28 @@ def format_vip_short_comment_for_sheet(verdict_data):
     return format_vip_score_comment_for_sheet(verdict_data)
 
 
+def _sheet_points(value) -> str:
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        text = str(value).strip() if value is not None else ""
+        return text or "—"
+
+
 def format_vip_score_comment_for_sheet(verdict_data):
+    """Розбір балів текстом. Не «10/10»: Sheets (USER_ENTERED) зберігає такий дріб як число 10."""
     parts = []
     if verdict_data.get("is_critical_fail"):
         crit = "; ".join(verdict_data.get("critical_reasons") or []) or "критична помилка"
         parts.append(f"КРИТИЧНА ПОМИЛКА: {crit}")
     for item in verdict_data.get("criteria") or []:
+        if not isinstance(item, dict):
+            text = str(item).strip()
+            if text and not _sheet_points(text).replace(".", "", 1).isdigit():
+                parts.append(f"— {text}")
+            continue
         key = item.get("label") or item.get("key") or "criterion"
-        pts = item.get("points")
-        mx = item.get("max_points")
-        line = f"— {key}: {pts:g}/{mx:g}"
+        line = f"— {key}: {_sheet_points(item.get('points'))} із {_sheet_points(item.get('max_points'))}"
         reasons = [str(r).strip() for r in (item.get("reasons") or []) if str(r).strip()]
         if reasons:
             line += f" ({'; '.join(reasons)})"

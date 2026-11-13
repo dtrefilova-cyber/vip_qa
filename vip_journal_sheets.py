@@ -511,6 +511,14 @@ def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str
     if not all(k in short for k in ("client_id", "manager", "contact")):
         logger.warning("VIP journal short headers incomplete; using fallback letters")
         short = dict(_FALLBACK_SHORT_COLS)
+    else:
+        # Один загублений заголовок (коментар перезаписали, «злив» не збігся) не викидає поле.
+        used = set(short.values())
+        for field, letter in _FALLBACK_SHORT_COLS.items():
+            if field == "total_score" or field in short or letter in used:
+                continue
+            short[field] = letter
+            used.add(letter)
     if not all(k in friendly for k in ("client_id", "manager", "contact", "ease")):
         logger.warning("VIP journal friendly headers incomplete; using fallback letters")
         friendly = dict(_FALLBACK_FRIENDLY_COLS)
@@ -669,6 +677,38 @@ def fields_to_letter_payload(
     return payload
 
 
+def _is_number_token(text: str) -> bool:
+    if not text or any(ch not in "0123456789.-+" for ch in text):
+        return False
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def comment_is_bare_number(value) -> bool:
+    """Коментар, який Sheets покаже як 10 або 0,0: голе число чи дріб на кшталт 10/10."""
+    text = str(value if value is not None else "").strip().replace(" ", "")
+    if not text:
+        return False
+    normalized = text.replace(",", ".")
+    if "/" in normalized:
+        left, right = normalized.split("/", 1)
+        return _is_number_token(left) and _is_number_token(right)
+    return _is_number_token(normalized)
+
+
+def assert_short_scores(scores: dict) -> None:
+    missing = [key for key in _SHORT_KEYS if scores.get(key) is None]
+    if missing:
+        raise VipJournalError(
+            "Немає обчисленого балу: "
+            + ", ".join(missing)
+            + ". Рядок не записується з порожньою коміркою."
+        )
+
+
 def build_short_row_payload(
     *,
     client_id: str,
@@ -681,6 +721,10 @@ def build_short_row_payload(
     qa_comment: str = "",
     colmap: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    assert_short_scores(scores)
+    comment = str(qa_comment or "").strip()
+    if comment_is_bare_number(comment):
+        raise VipJournalError("Коментар QA не може бути лише числом.")
     fields = build_short_field_values(
         client_id=client_id,
         call_date=call_date,
@@ -689,10 +733,12 @@ def build_short_row_payload(
         scores=scores,
         check_date=check_date,
         reviewer=reviewer,
-        qa_comment=qa_comment,
+        qa_comment=comment,
     )
     mapping = colmap or _FALLBACK_SHORT_COLS
-    required = {"slip_handling"} if scores.get("slip_handling") is not None else frozenset()
+    required = set(_SHORT_KEYS)
+    if comment:
+        required.add("comment")
     return fields_to_letter_payload(fields, mapping, required_fields=required)
 
 
@@ -816,13 +862,20 @@ def _parse_protected_data_index(exc: BaseException) -> int | None:
         return None
 
 
+def _value_input_option(value: Any) -> str:
+    """Дати й числа лишаються USER_ENTERED. Текст коментаря — RAW, щоб «10/10» не стало числом 10."""
+    if isinstance(value, str) and (
+        "\n" in value or value.startswith("—") or value.startswith("Важливе:")
+    ):
+        return "RAW"
+    return "USER_ENTERED"
+
+
 def _write_one_cell(worksheet, row: int, col: str, value: Any) -> None:
-    # Один range через batch_update — той самий API, що вже ходить у Sheets;
-    # так protected на одній комірці не валить інші (на відміну від пакета з N ranges).
     sheets_retry(
         worksheet.batch_update,
         [{"range": _a1(col, row), "values": [[value]]}],
-        value_input_option="USER_ENTERED",
+        value_input_option=_value_input_option(value),
     )
 
 
@@ -1037,20 +1090,15 @@ def write_vip_journal_result(
         analysis_id = str(call.get("analysis_id") or "").strip() or make_analysis_id(
             call, call_type
         )
+        # Повтор того ж analysis_id не є успіхом: попередній рядок міг лишити дірки.
+        # Пишемо повний payload у той самий рядок, якщо він у блоці даних.
         existing = get_existing_write(analysis_id)
+        repair_row = None
         if existing and existing.get("row"):
-            return {
-                "ok": True,
-                "status": "Записано",
-                "duplicate": True,
-                "analysis_id": analysis_id,
-                "row": int(existing["row"]),
-                "sheet_title": existing.get("sheet_title") or route["title"],
-                "sheet_id": existing.get("sheet_id") or route["sheet_id"],
-                "call_type": call_type,
-                "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
-                "critical_reasons": list(verdict_data.get("critical_reasons") or []),
-            }
+            try:
+                repair_row = int(existing["row"])
+            except (TypeError, ValueError):
+                repair_row = None
 
         if managers is None:
             managers = load_journal_managers(google_client)
@@ -1065,6 +1113,13 @@ def write_vip_journal_result(
 
         qa_comment = build_journal_qa_comment(call, verdict_data)
         start_row = int(route["start_row"])
+        if repair_row is not None and repair_row < start_row:
+            repair_row = None
+        if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+            if comment_is_bare_number(qa_comment) or not str(qa_comment or "").strip():
+                raise VipJournalError(
+                    "Коментар QA порожній або лише число — рядок не записується."
+                )
 
         with _WRITE_LOCK:
             worksheet = _open_project_worksheet(google_client, route)
@@ -1079,6 +1134,7 @@ def write_vip_journal_result(
             required_fields: set[str] = set()
             if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
                 scores = extract_short_scores(verdict_data)
+                assert_short_scores(scores)
                 fields = build_short_field_values(
                     client_id=client_id,
                     call_date=call_date,
@@ -1088,10 +1144,8 @@ def write_vip_journal_result(
                     check_date=check_date,
                     qa_comment=qa_comment,
                 )
-                if scores.get("slip_handling") is not None:
-                    required_fields.add("slip_handling")
-                if fields.get("comment"):
-                    required_fields.add("comment")
+                required_fields.update(_SHORT_KEYS)
+                required_fields.add("comment")
             else:
                 scores = extract_friendly_scores(verdict_data)
                 fields = build_friendly_field_values(
@@ -1124,20 +1178,28 @@ def write_vip_journal_result(
             manager_col_index = _col_letter_to_index(colmap.get("manager") or id_col)
             score_col_index = _col_letter_to_index(colmap.get("contact") or id_col)
             strict_cols = _strict_cols_for_fields(fields, colmap)
+            if must_write:
+                # Коментар і бали короткого дзвінка не «м'які»: інакше успіх лишає 10 і порожні клітинки.
+                strict_cols |= set(must_write)
 
             row = None
             committed_row = None
             last_verify_error = ""
             written_payload = payload
             for attempt in range(3):
-                id_vals = sheets_retry(worksheet.col_values, id_col_index)
-                mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
-                score_vals = sheets_retry(worksheet.col_values, score_col_index)
-                candidate = find_next_journal_row(
-                    id_vals,
-                    start_row=start_row if row is None else max(start_row, int(row) + 1),
-                    extra_cols=[mgr_vals, score_vals],
-                )
+                if repair_row is not None:
+                    if attempt > 0:
+                        break
+                    candidate = repair_row
+                else:
+                    id_vals = sheets_retry(worksheet.col_values, id_col_index)
+                    mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
+                    score_vals = sheets_retry(worksheet.col_values, score_col_index)
+                    candidate = find_next_journal_row(
+                        id_vals,
+                        start_row=start_row if row is None else max(start_row, int(row) + 1),
+                        extra_cols=[mgr_vals, score_vals],
+                    )
                 try:
                     written_payload = _write_cells_resilient(
                         worksheet,
@@ -1161,6 +1223,14 @@ def write_vip_journal_result(
                 verify_cols = list(written_payload.keys())
                 written_strict = {c for c in strict_cols if c in written_payload}
                 actual = _read_cells(worksheet, candidate, verify_cols)
+                comment_letter = colmap.get("comment")
+                got_comment = actual.get(comment_letter, "") if comment_letter else ""
+                if must_write and comment_is_bare_number(got_comment):
+                    last_verify_error = (
+                        f"Коментар QA у рядку {candidate} зберігся лише числом."
+                    )
+                    row = candidate
+                    continue
                 if _payload_matches(
                     written_payload, actual, strict_cols=written_strict or None
                 ):
@@ -1178,7 +1248,7 @@ def write_vip_journal_result(
                     {k: actual.get(k) for k in sorted(written_strict)},
                     colmap,
                 )
-                if _normalize_verify(actual.get(id_col)) == _normalize_verify(
+                if not must_write and _normalize_verify(actual.get(id_col)) == _normalize_verify(
                     written_payload.get(id_col)
                 ):
                     committed_row = candidate

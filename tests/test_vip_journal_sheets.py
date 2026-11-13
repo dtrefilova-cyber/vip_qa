@@ -586,6 +586,102 @@ def test_unrequired_protected_cell_still_skips_for_friendly():
     assert "L3" not in sheet.cells
 
 
+def test_short_payload_rejects_comment_that_is_only_a_number():
+    """Коментар «10» або «0,0» не може бути успішним payload: саме так 777 лишає дірки."""
+    from datetime import date
+
+    scores = {"contact": 5.0, "slip_handling": 0.0, "prep": 10.0, "closing": 2.5}
+    for bare in ("10", "0,0", "0.0", "10/10"):
+        with pytest.raises(VipJournalError, match="числом"):
+            build_short_row_payload(
+                client_id="6031394",
+                call_date=date(2026, 11, 6),
+                manager="Войтер Тетяна",
+                tl="TL",
+                scores=scores,
+                check_date=date(2026, 11, 13),
+                qa_comment=bare,
+            )
+
+
+def test_short_payload_keeps_zero_slip_and_full_comment():
+    from datetime import date
+
+    from vip_journal_sheets import build_journal_qa_comment, comment_is_bare_number
+
+    note = "Клієнт просив не називати проєкт уголос, повний текст важливого."
+    manual = "Месенджер до дзвінка, Viber. Номер підписаний — назва проєкту не обов'язкова."
+    verdict = {
+        "call_type": "vip_short_90s",
+        "criteria": [
+            {
+                "key": "contact",
+                "label": "Встановлення контакту",
+                "points": 5,
+                "max_points": 5,
+                "reasons": ["Номер підписаний — назва проєкту не обов'язкова"],
+            },
+            {
+                "key": "slip_handling",
+                "label": "Робота зі «зливом» / утримання контакту",
+                "points": 0,
+                "max_points": 10,
+                "reasons": ["Не зробив жодної дії з утримання контакту"],
+            },
+            {
+                "key": "prep",
+                "label": "Робота з запереченням (P.R.E.P.)",
+                "points": 10,
+                "max_points": 10,
+                "reasons": [],
+            },
+            {
+                "key": "closing",
+                "label": "Завершення",
+                "points": 2.5,
+                "max_points": 5,
+                "reasons": ["Відсутній елемент завершення: прощання"],
+            },
+        ],
+    }
+    comment = build_journal_qa_comment(
+        {
+            "journal_call_type": "short",
+            "important_note": note,
+            "qa_comment": manual,
+        },
+        verdict,
+    )
+    assert not comment_is_bare_number(comment)
+    assert comment.strip() not in {"10", "0,0", "0.0", "10/10"}
+    assert "Номер підписаний — назва проєкту не обов'язкова" in comment
+    assert "Важливе: " + note in comment
+    assert "Коментар до дзвінка: " + manual in comment
+    assert "із 10" in comment
+    assert "10/10" not in comment
+
+    payload = build_short_row_payload(
+        client_id="4632663",
+        call_date=date(2026, 11, 5),
+        manager="Войтер Тетяна",
+        tl="TL",
+        scores={"contact": 5.0, "slip_handling": 0.0, "prep": 10.0, "closing": 2.5},
+        check_date=date(2026, 11, 13),
+        qa_comment=comment,
+    )
+    assert payload["F"] == 5.0
+    assert payload["G"] == 0.0
+    assert payload["H"] == 10.0
+    assert payload["I"] == 2.5
+    assert "J" not in payload
+    stored = str(payload["L"])
+    assert not comment_is_bare_number(stored)
+    assert stored.strip() not in {"10", "0,0", "0.0"}
+    assert "Важливе: " + note in stored
+    assert manual in stored
+    assert "утримання контакту" in stored
+
+
 def test_analysis_id_differs_for_different_cards():
     base = {
         "url": "https://same",
