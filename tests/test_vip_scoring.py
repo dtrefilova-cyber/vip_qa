@@ -54,6 +54,61 @@ def test_contact_missing_one():
     assert any("ім'я клієнта" in r for r in result.reasons)
 
 
+def test_messenger_without_manager_name_still_cuts_2_5():
+    f = ContactFacts(
+        greeted=False,
+        used_client_name=False,
+        named_project=False,
+        availability_check_done=False,
+        exception_prior_messenger_contact=True,
+        manager_introduced_self=False,
+    )
+    result = score_contact(f)
+    assert result.points == 2.5
+    assert any("не назвав своє ім'я" in r for r in result.reasons)
+
+
+def test_client_addresses_manager_by_name_keeps_contact_points():
+    """Клієнт звернувся на ім'я — не зрізати 2.5, які інакше знімає месенджер без представлення."""
+    from core.vip_scoring_common import _contact_messenger
+
+    named = ContactFacts(
+        greeted=False,
+        used_client_name=False,
+        named_project=False,
+        availability_check_done=False,
+        exception_prior_messenger_contact=True,
+        manager_introduced_self=False,
+        exception_client_recognized_manager=True,
+    )
+    assert score_contact(named).points == 5.0
+    awarded = _contact_messenger(named)
+    assert awarded is not None
+    assert awarded[0] == 5.0
+
+    still_cut = _contact_messenger(
+        ContactFacts(
+            exception_prior_messenger_contact=True,
+            manager_introduced_self=False,
+        )
+    )
+    assert still_cut is not None
+    assert still_cut[0] == 2.5
+
+
+def test_prompts_client_address_fulfills_contact():
+    from prompts_vip_friendly import get_vip_friendly_analysis_prompt
+    from prompts_vip_short import get_vip_contact_prompt, get_vip_short_90s_analysis_prompt
+
+    sentence = (
+        "Якщо клієнт звертається до менеджера на ім'я, «Встановлення контакту» виконано: "
+        "не знижуй бал на 2,5 і постав exception_client_recognized_manager=true."
+    )
+    assert sentence in get_vip_short_90s_analysis_prompt()
+    assert sentence in get_vip_contact_prompt()
+    assert sentence in get_vip_friendly_analysis_prompt()
+
+
 def test_contact_missing_names_all_elements():
     f = ContactFacts(
         greeted=False,
