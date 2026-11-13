@@ -386,6 +386,206 @@ def test_analysis_id_stable_for_retry():
     assert make_analysis_id(call, "friendly") != a
 
 
+def test_short_journal_comment_includes_note_manual_and_scores():
+    """Короткий коментар тримає розбір балів і VIP-інфо картки, без обрізання."""
+    from vip_journal_sheets import build_journal_qa_comment
+
+    note = "Клієнт не бере бонуси до депозиту. " + ("ліміти " * 40).strip()
+    manual = "Месенджер до дзвінка, Viber."
+    verdict = {
+        "call_type": "vip_short_90s",
+        "criteria": [
+            {
+                "key": "slip_handling",
+                "label": "Робота зі «зливом» / утримання контакту",
+                "points": 10,
+                "max_points": 10,
+                "reasons": [
+                    "Клієнт не намагався завершити дзвінок достроково — критерій не застосовний"
+                ],
+            }
+        ],
+    }
+    comment = build_journal_qa_comment(
+        {
+            "journal_call_type": "short",
+            "important_note": note,
+            "qa_comment": manual,
+        },
+        verdict,
+    )
+    assert "критерій не застосовний" in comment
+    assert "Робота зі «зливом»" in comment
+    assert comment.index("критерій не застосовний") < comment.index("Важливе:")
+    assert "Важливе: " + note in comment
+    assert "Коментар до дзвінка: " + manual in comment
+    assert len(comment) > len(note)
+
+
+def test_friendly_journal_comment_does_not_copy_card_note():
+    from vip_journal_sheets import build_journal_qa_comment
+
+    verdict = {
+        "call_type": "vip_friendly",
+        "criteria": [
+            {
+                "key": "contact",
+                "label": "Встановлення контакту",
+                "points": 5,
+                "max_points": 5,
+                "reasons": [],
+            }
+        ],
+    }
+    comment = build_journal_qa_comment(
+        {
+            "journal_call_type": "friendly",
+            "important_note": "секретне важливе",
+            "qa_comment": "ручний friendly",
+        },
+        verdict,
+    )
+    assert "секретне важливе" not in comment
+    assert "ручний friendly" not in comment
+    assert "Встановлення контакту" in comment
+
+
+def test_short_slip_headers_keep_computed_score_including_zero():
+    from datetime import date
+
+    titles = (
+        'Робота зі "зливом" клієнта',
+        "Утримання контакту",
+        "Удержание контакта",
+        "Робота менеджера зі сливом",
+    )
+    for title in titles:
+        headers = [[
+            "ID клієнта",
+            "Дата дзвінка",
+            "Менеджер VIP",
+            "TL",
+            "Статус від TL",
+            "Встановлення контакту",
+            title,
+            "P.R.E.P",
+            "Завершення",
+            "Бал за дзвінок",
+            "Перевіряючий",
+            "Коментар QA",
+            "Дата перевірки",
+            "",
+            "ID клієнта",
+            "Дата дзвінка",
+            "Менеджер VIP",
+            "TL",
+            "Статус від TL",
+            "Встановлення контакту",
+            "Розвиток френдлі",
+            "Невимушеність",
+            "Бал за дзвінок",
+            "Коментар QA",
+        ]]
+        short = discover_journal_columns(headers)["short"]
+        assert short["slip_handling"] == "G", title
+        payload = build_short_row_payload(
+            client_id="42",
+            call_date=date(2026, 11, 12),
+            manager="Менеджер",
+            tl="TL",
+            scores={"contact": 5.0, "slip_handling": 0.0, "prep": 10.0, "closing": 2.5},
+            check_date=date(2026, 11, 13),
+            qa_comment="— Злив: 0/10",
+            colmap=short,
+        )
+        assert payload["G"] == 0.0
+        assert "J" not in payload
+        assert "Злив" in payload["L"]
+
+
+def test_short_payload_refuses_missing_slip_column():
+    from datetime import date
+
+    colmap = {
+        "client_id": "A",
+        "call_date": "B",
+        "manager": "C",
+        "tl": "D",
+        "contact": "F",
+        "prep": "H",
+        "closing": "I",
+        "reviewer": "K",
+        "comment": "L",
+        "check_date": "M",
+    }
+    with pytest.raises(VipJournalError, match="slip_handling"):
+        build_short_row_payload(
+            client_id="1",
+            call_date=date(2026, 11, 1),
+            manager="М",
+            tl="Т",
+            scores={"contact": 5.0, "slip_handling": 10.0, "prep": 10.0, "closing": 5.0},
+            check_date=date(2026, 11, 2),
+            colmap=colmap,
+        )
+
+
+class _FakeJournalSheet:
+    def __init__(self, cells=None, protected=()):
+        self.cells = dict(cells or {})
+        self.protected = set(protected)
+
+    def batch_get(self, ranges, value_render_option=None):
+        blocks = []
+        for ref in ranges:
+            value = self.cells.get(ref, "")
+            blocks.append([[value]] if value != "" else [[]])
+        return blocks
+
+    def batch_update(self, data, value_input_option=None):
+        for item in data:
+            ref = item["range"]
+            if ref in self.protected:
+                raise Exception("You are trying to edit a protected cell")
+            self.cells[ref] = item["values"][0][0]
+
+
+def test_required_slip_cell_is_not_a_successful_hole():
+    from vip_journal_sheets import _write_cells_resilient
+
+    formula = _FakeJournalSheet({"G4": "=SUM(F4)"})
+    with pytest.raises(VipJournalError, match="формул"):
+        _write_cells_resilient(
+            formula, 4, {"F": 5.0, "G": 10.0, "L": "коментар"}, must_write={"G"}
+        )
+    assert "F4" not in formula.cells
+
+    protected = _FakeJournalSheet(protected={"G5"})
+    with pytest.raises(VipJournalError, match="захищен"):
+        _write_cells_resilient(
+            protected, 5, {"G": 7.5, "F": 2.5}, must_write={"G"}
+        )
+    assert "F5" not in protected.cells
+
+    ok = _FakeJournalSheet()
+    written = _write_cells_resilient(
+        ok, 6, {"F": 5.0, "G": 10.0, "L": "повний коментар"}, must_write={"G", "L"}
+    )
+    assert written["G"] == 10.0
+    assert ok.cells["G6"] == 10.0
+    assert ok.cells["L6"] == "повний коментар"
+    assert ok.cells["F6"] == 5.0
+
+
+def test_unrequired_protected_cell_still_skips_for_friendly():
+    from vip_journal_sheets import _write_cells_resilient
+
+    sheet = _FakeJournalSheet(protected={"L3"})
+    written = _write_cells_resilient(sheet, 3, {"F": 5.0, "L": "коментар"})
+    assert written == {"F": 5.0}
+    assert "L3" not in sheet.cells
+
+
 def test_analysis_id_differs_for_different_cards():
     base = {
         "url": "https://same",

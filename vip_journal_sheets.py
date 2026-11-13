@@ -47,7 +47,8 @@ _HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("call_date", ("дата дзвінка", "дата звонка")),
     ("check_date", ("дата перевірки", "дата проверки")),
     ("tl_status", ("статус від tl", "статус tl", "статус від тімлід")),
-    ("slip_handling", ("злив", "утримання контакту", "удержание контакта")),
+    # «слив» — старий заголовок: підрядок «злив» його не ловить, і бал зникав.
+    ("slip_handling", ("злив", "слив", "утримання контакту", "удержание контакта")),
     ("contact", ("встановлення контакту", "установление контакта")),
     ("friendly_development", ("розвиток френдлі", "развитие френдли", "френдлі")),
     ("personal_approach", ("індивідуальний підхід", "индивидуальный подход")),
@@ -403,11 +404,29 @@ def find_next_journal_row(
 
 
 def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None = None) -> str:
-    """Коментар QA в журналі: розбір результатів аналізу (критерії + конкретні причини)."""
-    _ = call
+    """Коментар QA в журналі.
+
+    Завжди є розбір балів. На короткому дзвінку до нього додаються «Важливе»
+    і ручний коментар картки — без обрізання. Friendly лишає лише розбір балів.
+    """
     from google_sheets import format_vip_score_comment_for_sheet
 
-    return str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
+    scored = str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
+    parts = [scored] if scored else []
+    card = call or {}
+    call_type = resolve_journal_call_type(
+        card.get("journal_call_type")
+        or card.get("vip_call_type")
+        or (verdict_data or {}).get("call_type")
+    )
+    if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+        note = str(card.get("important_note") or "").strip()
+        manual = str(card.get("qa_comment") or "").strip()
+        if note:
+            parts.append("Важливе: " + note)
+        if manual:
+            parts.append("Коментар до дзвінка: " + manual)
+    return "\n".join(parts).strip()
 
 
 def _norm_header(value: str) -> str:
@@ -602,30 +621,47 @@ def fields_to_letter_payload(
     colmap: dict[str, str],
     *,
     skip_letters: set[str] | frozenset[str] | None = None,
+    required_fields: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    """field→value + field→letter → letter→value. Формулу total_score ніколи не пишемо."""
+    """field→value + field→letter → letter→value. Формулу total_score ніколи не пишемо.
+
+    required_fields із непорожнім значенням не пропускаються мовчки: немає колонки
+    або літера заборонена (формула) — VipJournalError. Порожнє значення required
+    не вимагає (бал не порахований).
+    """
     payload: dict[str, Any] = {}
     banned = set(skip_letters or ())
     formula_letter = colmap.get("total_score")
     if formula_letter:
         banned.add(formula_letter)
+    required = set(required_fields or ())
 
     for field, value in fields.items():
         if field == "total_score":
             continue
+        has_value = value != "" and value is not None
         letter = colmap.get(field)
         if not letter:
+            if field in required and has_value:
+                raise VipJournalError(
+                    f"Не знайдено колонку для {field} — значення не записано."
+                )
             # Не валимо весь рядок через одну відсутню колонку — пишемо решту.
             logger.warning("VIP journal missing column for field %s — skip field", field)
             continue
         if letter in banned:
+            if field in required and has_value:
+                raise VipJournalError(
+                    f"Колонка {letter} для {field} — формула або заборонена літера, "
+                    "значення не записано."
+                )
             logger.warning(
                 "VIP journal skip banned/formula column %s for field %s",
                 letter,
                 field,
             )
             continue
-        if value == "" or value is None:
+        if not has_value:
             continue
         payload[letter] = value
     for letter in banned:
@@ -656,7 +692,8 @@ def build_short_row_payload(
         qa_comment=qa_comment,
     )
     mapping = colmap or _FALLBACK_SHORT_COLS
-    return fields_to_letter_payload(fields, mapping)
+    required = {"slip_handling"} if scores.get("slip_handling") is not None else frozenset()
+    return fields_to_letter_payload(fields, mapping, required_fields=required)
 
 
 def build_friendly_row_payload(
@@ -823,16 +860,42 @@ def _drop_formula_cells(worksheet, row: int, payload: dict[str, Any]) -> dict[st
     return cleaned
 
 
-def _write_cells_resilient(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """Пише по одній комірці: protected/формула не валить увесь рядок (бали все одно потрапляють)."""
+def _write_cells_resilient(
+    worksheet,
+    row: int,
+    payload: dict[str, Any],
+    *,
+    must_write: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Пише по одній комірці: protected/формула не валить увесь рядок.
+
+    must_write (короткий злив і коментар) не можна пропустити: формула або захист
+    кидають VipJournalError до запису решти комірок цього рядка, щоб не лишити дірку
+    і не повідомити успіх. Без must_write поведінка Friendly не змінюється.
+    """
+    required = set(must_write or ())
     pending = _drop_formula_cells(worksheet, row, dict(payload))
+    blocked = [col for col in required if col not in pending]
+    if blocked:
+        raise VipJournalError(
+            "Не вдалося записати обов'язкові комірки "
+            + ", ".join(f"{col}{row}" for col in blocked)
+            + ": у комірці вже формула."
+        )
+    ordered = [col for col in required if col in pending]
+    ordered.extend(col for col in pending if col not in required)
     written: dict[str, Any] = {}
     skipped: list[str] = []
-    for col, value in list(pending.items()):
+    for col in ordered:
+        value = pending[col]
         try:
             _write_one_cell(worksheet, row, col, value)
             written[col] = value
         except Exception as exc:
+            if _is_protected_cell_error(exc) and col in required:
+                raise VipJournalError(
+                    f"Не вдалося записати обов'язкову комірку {col}{row}: вона захищена."
+                ) from exc
             if _is_protected_cell_error(exc):
                 skipped.append(col)
                 logger.warning(
@@ -843,6 +906,9 @@ def _write_cells_resilient(worksheet, row: int, payload: dict[str, Any]) -> dict
                 )
                 continue
             raise
+    if required and not required.issubset(written):
+        missing = ", ".join(f"{col}{row}" for col in sorted(required - set(written)))
+        raise VipJournalError(f"Обов'язкові комірки не записані: {missing}.")
     if not written:
         raise VipJournalError(
             "Усі комірки запису захищені; не вдалося записати рядок журналу."
@@ -1010,6 +1076,7 @@ def write_vip_journal_result(
             )
             colmap = col_maps[block_key]
             skip_letters = set(col_maps.get("skip") or ())
+            required_fields: set[str] = set()
             if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
                 scores = extract_short_scores(verdict_data)
                 fields = build_short_field_values(
@@ -1021,6 +1088,10 @@ def write_vip_journal_result(
                     check_date=check_date,
                     qa_comment=qa_comment,
                 )
+                if scores.get("slip_handling") is not None:
+                    required_fields.add("slip_handling")
+                if fields.get("comment"):
+                    required_fields.add("comment")
             else:
                 scores = extract_friendly_scores(verdict_data)
                 fields = build_friendly_field_values(
@@ -1033,10 +1104,18 @@ def write_vip_journal_result(
                     qa_comment=qa_comment,
                 )
             payload = fields_to_letter_payload(
-                fields, colmap, skip_letters=skip_letters
+                fields,
+                colmap,
+                skip_letters=skip_letters,
+                required_fields=required_fields,
             )
             if not payload:
                 raise VipJournalError("Порожній payload для запису в журнал.")
+            must_write = {
+                colmap[field]
+                for field in required_fields
+                if colmap.get(field) and colmap[field] in payload
+            }
 
             id_col = colmap.get("client_id")
             if not id_col:
@@ -1047,6 +1126,7 @@ def write_vip_journal_result(
             strict_cols = _strict_cols_for_fields(fields, colmap)
 
             row = None
+            committed_row = None
             last_verify_error = ""
             written_payload = payload
             for attempt in range(3):
@@ -1058,15 +1138,33 @@ def write_vip_journal_result(
                     start_row=start_row if row is None else max(start_row, int(row) + 1),
                     extra_cols=[mgr_vals, score_vals],
                 )
-                # Формули / protected клітинки пропускаємо; бали й метадані все одно пишемо.
-                written_payload = _write_cells_resilient(worksheet, candidate, payload)
+                try:
+                    written_payload = _write_cells_resilient(
+                        worksheet,
+                        candidate,
+                        payload,
+                        must_write=must_write or None,
+                    )
+                except VipJournalError as exc:
+                    # Формула/захист на зливі або коментарі короткого: цей рядок не успіх,
+                    # шукаємо наступний вільний, де комірку можна записати.
+                    last_verify_error = str(exc)
+                    row = candidate
+                    logger.warning(
+                        "VIP journal required cell blocked analysis_id=%s row=%s attempt=%s: %s",
+                        analysis_id,
+                        candidate,
+                        attempt + 1,
+                        exc,
+                    )
+                    continue
                 verify_cols = list(written_payload.keys())
                 written_strict = {c for c in strict_cols if c in written_payload}
                 actual = _read_cells(worksheet, candidate, verify_cols)
                 if _payload_matches(
                     written_payload, actual, strict_cols=written_strict or None
                 ):
-                    row = candidate
+                    committed_row = candidate
                     break
                 last_verify_error = (
                     f"Верифікація запису не пройшла (рядок {candidate}, "
@@ -1083,12 +1181,13 @@ def write_vip_journal_result(
                 if _normalize_verify(actual.get(id_col)) == _normalize_verify(
                     written_payload.get(id_col)
                 ):
-                    row = candidate
+                    committed_row = candidate
                     break
                 row = candidate
 
-            if row is None:
+            if committed_row is None:
                 raise VipJournalError(last_verify_error or "Не вдалося записати рядок журналу.")
+            row = committed_row
 
             mapping = {
                 "spreadsheet_id": VIP_JOURNAL_SHEET_ID,
