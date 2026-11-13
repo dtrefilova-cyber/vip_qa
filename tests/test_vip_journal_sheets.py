@@ -251,7 +251,7 @@ def test_find_next_row_skips_row_with_manager_but_empty_id():
     assert find_next_journal_row(ids, start_row=3, extra_cols=[managers]) == 4
 
 
-def test_payload_matches_ignores_date_and_comment_drift():
+def test_reread_rejects_date_and_comment_drift():
     from vip_journal_sheets import _payload_matches, _strict_cols_for_fields
 
     fields = {
@@ -291,8 +291,8 @@ def test_payload_matches_ignores_date_and_comment_drift():
         "M": "2026-11-11",
     }
     strict = _strict_cols_for_fields(fields, colmap)
-    assert strict == {"A", "C", "F"}
-    assert _payload_matches(expected, actual, strict_cols=strict) is True
+    assert strict == {"A", "B", "C", "F", "K", "L", "M"}
+    assert _payload_matches(expected, actual, strict_cols=strict) is False
 
 
 def test_discover_columns_after_tl_insert_for_both_blocks():
@@ -530,10 +530,30 @@ def test_short_payload_refuses_missing_slip_column():
         )
 
 
+def _a1_cells(ref: str, row_values: list) -> dict[str, object]:
+    start, _, end = ref.partition(":")
+    letters_row = start
+    row = "".join(ch for ch in letters_row if ch.isdigit())
+    start_letter = "".join(ch for ch in letters_row if ch.isalpha())
+    end_letter = "".join(ch for ch in (end or start) if ch.isalpha()) or start_letter
+    from vip_journal_sheets import _col_letter_to_index
+    from google_sheets import col_index_to_letter
+
+    values = list(row_values)
+    out = {}
+    for offset, idx in enumerate(
+        range(_col_letter_to_index(start_letter), _col_letter_to_index(end_letter) + 1)
+    ):
+        out[f"{col_index_to_letter(idx)}{row}"] = values[offset]
+    return out
+
+
 class _FakeJournalSheet:
     def __init__(self, cells=None, protected=()):
         self.cells = dict(cells or {})
         self.protected = set(protected)
+        self.title = "777"
+        self.updates = []
 
     def batch_get(self, ranges, value_render_option=None):
         blocks = []
@@ -543,47 +563,53 @@ class _FakeJournalSheet:
         return blocks
 
     def batch_update(self, data, value_input_option=None):
+        pending = []
         for item in data:
             ref = item["range"]
-            if ref in self.protected:
-                raise Exception("You are trying to edit a protected cell")
-            self.cells[ref] = item["values"][0][0]
+            expanded = _a1_cells(ref, item["values"][0])
+            if any(cell in self.protected for cell in expanded):
+                raise Exception(
+                    "APIError: [400]: You are trying to edit a protected cell"
+                )
+            pending.append((expanded, value_input_option))
+        for expanded, mode in pending:
+            self.cells.update(expanded)
+            self.updates.append((mode, expanded))
 
 
-def test_required_slip_cell_is_not_a_successful_hole():
+def test_validation_error_quotes_sheet_range_and_account():
     from vip_journal_sheets import _write_cells_resilient
 
-    formula = _FakeJournalSheet({"G4": "=SUM(F4)"})
-    with pytest.raises(VipJournalError, match="формул"):
-        _write_cells_resilient(
-            formula, 4, {"F": 5.0, "G": 10.0, "L": "коментар"}, must_write={"G"}
-        )
-    assert "F4" not in formula.cells
-
     protected = _FakeJournalSheet(protected={"G5"})
-    with pytest.raises(VipJournalError, match="захищен"):
+    with pytest.raises(VipJournalError, match="protected") as caught:
         _write_cells_resilient(
-            protected, 5, {"G": 7.5, "F": 2.5}, must_write={"G"}
+            protected,
+            5,
+            {"G": 7.5, "F": 2.5},
+            must_write={"G"},
+            sheet_title="777",
+            account="writer@example.com",
         )
+    message = str(caught.value)
+    assert "777" in message
+    assert "F5:G5" in message
+    assert "writer@example.com" in message
+    assert "захищен" not in message
     assert "F5" not in protected.cells
 
     ok = _FakeJournalSheet()
     written = _write_cells_resilient(
-        ok, 6, {"F": 5.0, "G": 10.0, "L": "повний коментар"}, must_write={"G", "L"}
+        ok,
+        6,
+        {"F": 5.0, "G": 10.0, "L": "повний коментар"},
+        must_write={"G", "L"},
+        comment_letter="L",
     )
     assert written["G"] == 10.0
     assert ok.cells["G6"] == 10.0
     assert ok.cells["L6"] == "повний коментар"
     assert ok.cells["F6"] == 5.0
-
-
-def test_unrequired_protected_cell_still_skips_for_friendly():
-    from vip_journal_sheets import _write_cells_resilient
-
-    sheet = _FakeJournalSheet(protected={"L3"})
-    written = _write_cells_resilient(sheet, 3, {"F": 5.0, "L": "коментар"})
-    assert written == {"F": 5.0}
-    assert "L3" not in sheet.cells
+    assert ok.updates[-1][0] == "RAW"
 
 
 def test_short_payload_rejects_comment_that_is_only_a_number():
@@ -680,6 +706,144 @@ def test_short_payload_keeps_zero_slip_and_full_comment():
     assert "Важливе: " + note in stored
     assert manual in stored
     assert "утримання контакту" in stored
+
+
+def test_rectangles_never_include_status_or_formula():
+    from vip_journal_sheets import plan_journal_rectangles
+
+    short_payload = {
+        "A": "'4632663",
+        "B": "05.11.2026",
+        "C": "Voiter I.",
+        "D": "Ivan I.",
+        "E": "Закрито",
+        "F": 5,
+        "G": 0.0,
+        "H": 10,
+        "I": 2.5,
+        "J": "",
+        "K": "АІ",
+        "L": "— Злив: 0 із 10",
+        "M": "13.11.2026",
+    }
+    spans = plan_journal_rectangles(
+        short_payload, "short", existing=False, comment_letter="L"
+    )
+    letters = [col for span in spans for col in span["cols"]]
+    assert letters == list("ABCD") + list("FGHI") + ["K", "L", "M"]
+    assert {span["mode"] for span in spans if "L" in span["cols"]} == {"RAW"}
+    existing = plan_journal_rectangles(
+        short_payload, "short", existing=True, comment_letter="L"
+    )
+    assert [col for span in existing for col in span["cols"]] == list("FGHI") + ["K", "L", "M"]
+
+    friendly = {
+        "O": "'1",
+        "P": "13.11.2026",
+        "Q": "Voiter I.",
+        "R": "Ivan I.",
+        "S": "В роботі",
+        "T": 5,
+        "U": 2.5,
+        "AA": 5,
+        "AB": "",
+        "AC": "АІ",
+        "AD": "коментар",
+        "AE": "13.11.2026",
+    }
+    new_friendly = plan_journal_rectangles(
+        friendly, "friendly", existing=False, comment_letter="AD"
+    )
+    friendly_letters = [col for span in new_friendly for col in span["cols"]]
+    assert friendly_letters[0:4] == list("OPQR")
+    assert "S" not in friendly_letters
+    assert "AB" not in friendly_letters
+    assert friendly_letters[-3:] == ["AC", "AD", "AE"]
+    scored = plan_journal_rectangles(
+        friendly, "friendly", existing=True, comment_letter="AD"
+    )
+    scored_letters = [col for span in scored for col in span["cols"]]
+    assert scored_letters[0] == "T"
+    assert "O" not in scored_letters
+    assert "AB" not in scored_letters
+
+
+def test_missing_friendly_score_is_not_invented_as_zero():
+    from datetime import date
+
+    payload = build_friendly_row_payload(
+        client_id="1",
+        call_date=date(2026, 11, 13),
+        manager="Voiter I.",
+        tl="Ivan I.",
+        scores={"contact": 5.0},
+        check_date=date(2026, 11, 13),
+        qa_comment="критерій без балу не стає нулем",
+    )
+    assert 0 not in payload.values()
+    assert 0.0 not in payload.values()
+    assert payload["T"] == 5.0
+    assert "U" not in payload
+    assert "AB" not in payload
+    assert "S" not in payload
+
+
+def test_manager_and_tl_keep_directory_spelling():
+    row = resolve_manager_from_directory(
+        [
+            {
+                "project": "777",
+                "tl": "Ivan I.",
+                "manager": "Voiter I.",
+                "login": "voiter",
+            }
+        ],
+        project_key="777",
+        login="voiter",
+    )
+    assert row["manager"] == "Voiter I."
+    assert row["tl"] == "Ivan I."
+
+
+def test_same_client_on_two_rows_is_ambiguous():
+    from datetime import date
+
+    from vip_journal_sheets import match_journal_rows
+
+    rows = match_journal_rows(
+        ["", "", "4632663", "4632663"],
+        ["", "", "05.11.2026", "05.11.2026"],
+        ["", "", "Войтер Тетяна", "Войтер Тетяна"],
+        client_id="'4632663",
+        call_date=date(2026, 11, 5),
+        manager="Войтер Тетяна",
+        start_row=3,
+    )
+    assert rows == [3, 4]
+
+
+def test_prefilled_formula_row_stays_free_until_call_data_exists():
+    ids = ["", "", ""]
+    assert find_next_journal_row(ids, start_row=3) == 3
+
+
+def test_missing_total_formula_is_restored_alone():
+    from vip_journal_sheets import ensure_total_formula
+
+    sheet = _FakeJournalSheet()
+    formula = ensure_total_formula(
+        sheet, "short", 103, sheet_title="Vegas", account="writer@example.com"
+    )
+    assert formula == "=SUM(F103:I103)"
+    assert sheet.cells["J103"] == "=SUM(F103:I103)"
+    assert list(sheet.cells) == ["J103"]
+
+    friendly = _FakeJournalSheet({"AB8": "=SUM(T8:AA8)"})
+    kept = ensure_total_formula(
+        friendly, "friendly", 8, sheet_title="Betking", account="writer@example.com"
+    )
+    assert kept == "=SUM(T8:AA8)"
+    assert friendly.updates == []
 
 
 def test_analysis_id_differs_for_different_cards():

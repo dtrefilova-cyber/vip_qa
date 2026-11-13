@@ -1,8 +1,7 @@
 """Автозапис результатів VIP-аналізу в журнал за проєктом (Betking / 777 / Vegas).
 
-Колонки визначаються за заголовками аркуша (а не жорсткими літерами), щоб
-однакова логіка працювала для Betking / 777 / Vegas і short / friendly після
-зсувів (напр. нова колонка справа від TL). Колонку «Бал за дзвінок» ніколи не пишемо.
+Правила діапазонів, типів значень і повторного читання: docs/vip-journal-write-spec.md.
+Короткі: A–I і K–M (без E і без J). Френдлі: O–AA і AC–AE (без S і без AB).
 """
 
 from __future__ import annotations
@@ -63,8 +62,6 @@ _HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("manager", ("піб менеджера", "менеджер vip")),
     ("tl", ("тімлід", "тимлид")),
 ]
-
-_SOFT_FIELD_KEYS = frozenset({"call_date", "check_date", "comment", "reviewer"})
 
 # Fallback = реальний журнал Betking/777/Vegas після колонки «Статус від TL»
 # у short і friendly: short A:M (E статус, J формула), friendly O:AE (S статус, AB формула).
@@ -372,6 +369,53 @@ def _cell_filled(value) -> bool:
     return bool(str(value or "").strip())
 
 
+def _norm_id(value) -> str:
+    text = str(value or "").strip()
+    if text.startswith("'"):
+        text = text[1:]
+    return text.casefold()
+
+
+def _same_journal_date(left, right) -> bool:
+    try:
+        parsed_left = left if isinstance(left, date) else _parse_ua_date(left)
+        parsed_right = right if isinstance(right, date) else _parse_ua_date(right)
+    except VipJournalError:
+        return False
+    if parsed_left is None or parsed_right is None:
+        return False
+    return parsed_left == parsed_right
+
+
+def match_journal_rows(
+    ids: list,
+    dates: list,
+    managers: list,
+    *,
+    client_id: str,
+    call_date: date | str,
+    manager: str,
+    start_row: int,
+) -> list[int]:
+    """Рядки блоку з тим самим ID, датою і менеджером. ID сам по собі не унікальний."""
+    want_id = _norm_id(client_id)
+    want_manager = clean_sheet_cell(manager).casefold()
+    if not want_id or not want_manager:
+        return []
+    limit = max(len(ids or []), len(dates or []), len(managers or []))
+    found: list[int] = []
+    for idx in range(max(start_row, 1) - 1, limit):
+        if _norm_id(ids[idx] if idx < len(ids) else "") != want_id:
+            continue
+        if not _same_journal_date(dates[idx] if idx < len(dates) else "", call_date):
+            continue
+        got_manager = clean_sheet_cell(managers[idx] if idx < len(managers) else "").casefold()
+        if got_manager != want_manager:
+            continue
+        found.append(idx + 1)
+    return found
+
+
 def find_next_journal_row(
     col_values: list,
     *,
@@ -585,7 +629,9 @@ def build_short_field_values(
         "reviewer": reviewer,
         "check_date": _as_sheet_date(check_date),
     }
-    comment = str(qa_comment or "").strip()
+    comment = neutralize_sheet_ratios(str(qa_comment or "")).strip()
+    if comment_is_bare_number(comment):
+        comment = ""
     if comment:
         fields["comment"] = comment
     return fields
@@ -618,7 +664,9 @@ def build_friendly_field_values(
         "reviewer": reviewer,
         "check_date": _as_sheet_date(check_date),
     }
-    comment = str(qa_comment or "").strip()
+    comment = neutralize_sheet_ratios(str(qa_comment or "")).strip()
+    if comment_is_bare_number(comment):
+        comment = ""
     if comment:
         fields["comment"] = comment
     return fields
@@ -642,6 +690,10 @@ def fields_to_letter_payload(
     formula_letter = colmap.get("total_score")
     if formula_letter:
         banned.add(formula_letter)
+    status_letter = colmap.get("tl_status")
+    if status_letter:
+        banned.add(status_letter)
+    banned.update({"J", "AB", "E", "S"})
     required = set(required_fields or ())
 
     for field, value in fields.items():
@@ -687,16 +739,35 @@ def _is_number_token(text: str) -> bool:
     return True
 
 
+def neutralize_sheet_ratios(text: str) -> str:
+    """Sheets зберігає «10/10» як число 10. У коментарі лишається «10 із 10»."""
+    import re
+
+    return re.sub(
+        r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)",
+        r"\1 із \2",
+        str(text or ""),
+    )
+
+
 def comment_is_bare_number(value) -> bool:
-    """Коментар, який Sheets покаже як 10 або 0,0: голе число чи дріб на кшталт 10/10."""
-    text = str(value if value is not None else "").strip().replace(" ", "")
+    """Коментар, який Sheets покаже як 10 або 0,0: голе число чи самий дріб 10/10."""
+    import re
+
+    text = str(value if value is not None else "").strip()
     if not text:
         return False
-    normalized = text.replace(",", ".")
+    compact = text.replace(" ", "")
+    normalized = compact.replace(",", ".")
     if "/" in normalized:
         left, right = normalized.split("/", 1)
-        return _is_number_token(left) and _is_number_token(right)
-    return _is_number_token(normalized)
+        if _is_number_token(left) and _is_number_token(right):
+            return True
+    if _is_number_token(normalized):
+        return True
+    return bool(
+        re.fullmatch(r"\d+(?:[.,]\d+)?\s+із\s+\d+(?:[.,]\d+)?", text.replace(",", "."))
+    )
 
 
 def assert_short_scores(scores: dict) -> None:
@@ -862,55 +933,162 @@ def _parse_protected_data_index(exc: BaseException) -> int | None:
         return None
 
 
-def _value_input_option(value: Any) -> str:
-    """Дати й числа лишаються USER_ENTERED. Текст коментаря — RAW, щоб «10/10» не стало числом 10."""
-    if isinstance(value, str) and (
-        "\n" in value or value.startswith("—") or value.startswith("Важливе:")
-    ):
-        return "RAW"
-    return "USER_ENTERED"
+_NEVER_WRITE_LETTERS = frozenset({"J", "AB", "E", "S"})
 
 
-def _write_one_cell(worksheet, row: int, col: str, value: Any) -> None:
-    sheets_retry(
-        worksheet.batch_update,
-        [{"range": _a1(col, row), "values": [[value]]}],
-        value_input_option=_value_input_option(value),
-    )
-
-
-def _is_protected_cell_error(exc: BaseException) -> bool:
-    text = str(exc).lower()
+def allowed_write_columns(call_type: str, *, existing: bool) -> list[str]:
+    """Колонки автоматичного запису. E/S і J/AB сюди не входять."""
+    if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+        if existing:
+            return list("FGHI") + list("KLM")
+        return list("ABCD") + list("FGHI") + list("KLM")
+    if existing:
+        return _letters_between("T", "AA") + _letters_between("AC", "AE")
     return (
-        "protected" in text
-        or "захищен" in text
-        or "защищен" in text
-        or "you are trying to edit a protected cell" in text
+        _letters_between("O", "R")
+        + _letters_between("T", "AA")
+        + _letters_between("AC", "AE")
     )
 
 
-def _drop_formula_cells(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """Прибирає комірки, де вже стоїть формула (=…), щоб не бити захист «Бал за дзвінок»."""
-    if not payload:
-        return payload
-    cols = list(payload.keys())
-    try:
-        existing = _read_cells(worksheet, row, cols, formulas=True)
-    except Exception:
-        logger.debug("VIP journal formula probe failed row=%s", row, exc_info=True)
-        return dict(payload)
-    cleaned: dict[str, Any] = {}
-    for col, value in payload.items():
-        cell = str(existing.get(col) or "").strip()
-        if cell.startswith("="):
-            logger.warning(
-                "VIP journal skip formula cell %s%d (value starts with =)",
-                col,
-                row,
-            )
+def _letters_between(start: str, end: str) -> list[str]:
+    from google_sheets import col_index_to_letter
+
+    return [
+        col_index_to_letter(idx)
+        for idx in range(_col_letter_to_index(start), _col_letter_to_index(end) + 1)
+    ]
+
+
+def plan_journal_rectangles(
+    payload: dict[str, Any],
+    call_type: str,
+    *,
+    existing: bool,
+    comment_letter: str | None = None,
+) -> list[dict[str, Any]]:
+    """Прямокутники без J/AB і без порожнього значення всередині.
+
+    Коментар іде окремим RAW-діапазоном, бали й дати — USER_ENTERED.
+    """
+    allowed = [
+        col
+        for col in allowed_write_columns(call_type, existing=existing)
+        if col not in _NEVER_WRITE_LETTERS
+    ]
+    spans: list[dict[str, Any]] = []
+    for col in allowed:
+        if col not in payload or payload[col] == "" or payload[col] is None:
             continue
-        cleaned[col] = value
-    return cleaned
+        mode = "RAW" if col == comment_letter else "USER_ENTERED"
+        if (
+            spans
+            and spans[-1]["mode"] == mode
+            and _col_letter_to_index(col) == _col_letter_to_index(spans[-1]["end"]) + 1
+        ):
+            spans[-1]["end"] = col
+            spans[-1]["values"].append(payload[col])
+            spans[-1]["cols"].append(col)
+            continue
+        spans.append(
+            {
+                "start": col,
+                "end": col,
+                "values": [payload[col]],
+                "cols": [col],
+                "mode": mode,
+            }
+        )
+    for span in spans:
+        if span["start"] in _NEVER_WRITE_LETTERS or span["end"] in _NEVER_WRITE_LETTERS:
+            raise VipJournalError("Прямокутник запису містить J, AB, E або S.")
+        if any(value == "" or value is None for value in span["values"]):
+            raise VipJournalError("Прямокутник запису містить порожнє значення.")
+    return spans
+
+
+def expected_total_formula(call_type: str, row: int) -> tuple[str, str]:
+    if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
+        return "J", f"=SUM(F{row}:I{row})"
+    return "AB", f"=SUM(T{row}:AA{row})"
+
+
+def ensure_total_formula(
+    worksheet,
+    call_type: str,
+    row: int,
+    *,
+    sheet_title: str,
+    account: str,
+) -> str:
+    """Якщо J/AB порожні, відновлює SUM окремою коміркою і перечитує формулу."""
+    formula_col, formula_text = expected_total_formula(call_type, row)
+    stored_formula = _read_cells(worksheet, row, [formula_col], formulas=True)
+    current = str(stored_formula.get(formula_col) or "").lstrip()
+    if not current.startswith("="):
+        try:
+            sheets_retry(
+                worksheet.batch_update,
+                [{"range": _a1(formula_col, row), "values": [[formula_text]]}],
+                value_input_option="USER_ENTERED",
+            )
+        except Exception as exc:
+            raise _write_error(sheet_title, _a1(formula_col, row), exc, account) from exc
+        stored_formula = _read_cells(worksheet, row, [formula_col], formulas=True)
+        current = str(stored_formula.get(formula_col) or "").lstrip()
+    if not current.upper().startswith("=SUM"):
+        raise VipJournalError(
+            f"Формула {formula_col}{row} не підтвердилась після запису."
+        )
+    return current
+
+
+def _range_ref(start: str, end: str, row: int) -> str:
+    if start == end:
+        return _a1(start, row)
+    return f"{start}{row}:{end}{row}"
+
+
+def _writer_account(google_client) -> str:
+    creds = getattr(getattr(google_client, "http", None), "credentials", None)
+    email = getattr(creds, "service_account_email", None) or getattr(creds, "signer_email", None)
+    return str(email) if email else "невідомий обліковий запис"
+
+
+def _write_error(sheet_title: str, ref: str, exc: BaseException, account: str) -> VipJournalError:
+    return VipJournalError(
+        f"{sheet_title} {ref}: {exc}. Обліковий запис: {account}."
+    )
+
+
+def _write_rectangles(
+    worksheet,
+    row: int,
+    spans: list[dict[str, Any]],
+    *,
+    sheet_title: str,
+    account: str,
+) -> None:
+    grouped: dict[str, list[dict]] = {"USER_ENTERED": [], "RAW": []}
+    for span in spans:
+        grouped[span["mode"]].append(
+            {
+                "range": _range_ref(span["start"], span["end"], row),
+                "values": [span["values"]],
+            }
+        )
+    for mode, data in grouped.items():
+        if not data:
+            continue
+        try:
+            sheets_retry(
+                worksheet.batch_update,
+                data,
+                value_input_option=mode,
+            )
+        except Exception as exc:
+            refs = ", ".join(item["range"] for item in data)
+            raise _write_error(sheet_title, refs, exc, account) from exc
 
 
 def _write_cells_resilient(
@@ -919,62 +1097,44 @@ def _write_cells_resilient(
     payload: dict[str, Any],
     *,
     must_write: set[str] | frozenset[str] | None = None,
+    call_type: str = VIP_JOURNAL_CALL_TYPE_SHORT,
+    existing: bool = False,
+    comment_letter: str | None = None,
+    sheet_title: str = "",
+    account: str = "невідомий обліковий запис",
 ) -> dict[str, Any]:
-    """Пише по одній комірці: protected/формула не валить увесь рядок.
+    """Пише прямокутниками A–I/K–M або O–AA/AC–AE. J і AB не входять.
 
-    must_write (короткий злив і коментар) не можна пропустити: формула або захист
-    кидають VipJournalError до запису решти комірок цього рядка, щоб не лишити дірку
-    і не повідомити успіх. Без must_write поведінка Friendly не змінюється.
+    Помилка валідації не вважається захищеним діапазоном і не дає успіху з діркою.
     """
     required = set(must_write or ())
-    pending = _drop_formula_cells(worksheet, row, dict(payload))
-    blocked = [col for col in required if col not in pending]
-    if blocked:
+    pending = {
+        col: value
+        for col, value in payload.items()
+        if col not in _NEVER_WRITE_LETTERS and value != "" and value is not None
+    }
+    spans = plan_journal_rectangles(
+        pending,
+        call_type,
+        existing=existing,
+        comment_letter=comment_letter,
+    )
+    written_cols = {col for span in spans for col in span["cols"]}
+    missing = sorted(required - written_cols)
+    if missing:
         raise VipJournalError(
-            "Не вдалося записати обов'язкові комірки "
-            + ", ".join(f"{col}{row}" for col in blocked)
-            + ": у комірці вже формула."
+            "Обов'язкові комірки не входять у запис: "
+            + ", ".join(f"{col}{row}" for col in missing)
+            + "."
         )
-    ordered = [col for col in required if col in pending]
-    ordered.extend(col for col in pending if col not in required)
-    written: dict[str, Any] = {}
-    skipped: list[str] = []
-    for col in ordered:
-        value = pending[col]
-        try:
-            _write_one_cell(worksheet, row, col, value)
-            written[col] = value
-        except Exception as exc:
-            if _is_protected_cell_error(exc) and col in required:
-                raise VipJournalError(
-                    f"Не вдалося записати обов'язкову комірку {col}{row}: вона захищена."
-                ) from exc
-            if _is_protected_cell_error(exc):
-                skipped.append(col)
-                logger.warning(
-                    "VIP journal skip protected cell %s%d: %s",
-                    col,
-                    row,
-                    exc,
-                )
-                continue
-            raise
-    if required and not required.issubset(written):
-        missing = ", ".join(f"{col}{row}" for col in sorted(required - set(written)))
-        raise VipJournalError(f"Обов'язкові комірки не записані: {missing}.")
-    if not written:
-        raise VipJournalError(
-            "Усі комірки запису захищені; не вдалося записати рядок журналу."
-            + (f" Пропущено: {', '.join(skipped)}" if skipped else "")
-        )
-    if skipped:
-        logger.warning(
-            "VIP journal wrote row=%s cols=%s skipped_protected=%s",
-            row,
-            list(written.keys()),
-            skipped,
-        )
-    return written
+    _write_rectangles(
+        worksheet,
+        row,
+        spans,
+        sheet_title=sheet_title or getattr(worksheet, "title", ""),
+        account=account,
+    )
+    return {col: pending[col] for col in written_cols}
 
 
 def _read_cells(
@@ -1035,7 +1195,7 @@ def _strict_cols_for_fields(fields: dict[str, Any], colmap: dict[str, str]) -> s
     for field, value in fields.items():
         if value == "" or value is None:
             continue
-        if field in _SOFT_FIELD_KEYS or field == "total_score":
+        if field == "total_score":
             continue
         letter = colmap.get(field)
         if letter:
@@ -1181,83 +1341,91 @@ def write_vip_journal_result(
             if must_write:
                 # Коментар і бали короткого дзвінка не «м'які»: інакше успіх лишає 10 і порожні клітинки.
                 strict_cols |= set(must_write)
+            comment_letter = colmap.get("comment")
+            date_col_index = _col_letter_to_index(colmap.get("call_date") or id_col)
+            comment_col_index = _col_letter_to_index(comment_letter or id_col)
+            account = _writer_account(google_client)
 
-            row = None
-            committed_row = None
-            last_verify_error = ""
-            written_payload = payload
-            for attempt in range(3):
-                if repair_row is not None:
-                    if attempt > 0:
-                        break
-                    candidate = repair_row
-                else:
-                    id_vals = sheets_retry(worksheet.col_values, id_col_index)
-                    mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
-                    score_vals = sheets_retry(worksheet.col_values, score_col_index)
-                    candidate = find_next_journal_row(
-                        id_vals,
-                        start_row=start_row if row is None else max(start_row, int(row) + 1),
-                        extra_cols=[mgr_vals, score_vals],
-                    )
-                try:
-                    written_payload = _write_cells_resilient(
-                        worksheet,
-                        candidate,
-                        payload,
-                        must_write=must_write or None,
-                    )
-                except VipJournalError as exc:
-                    # Формула/захист на зливі або коментарі короткого: цей рядок не успіх,
-                    # шукаємо наступний вільний, де комірку можна записати.
-                    last_verify_error = str(exc)
-                    row = candidate
-                    logger.warning(
-                        "VIP journal required cell blocked analysis_id=%s row=%s attempt=%s: %s",
-                        analysis_id,
-                        candidate,
-                        attempt + 1,
-                        exc,
-                    )
-                    continue
-                verify_cols = list(written_payload.keys())
-                written_strict = {c for c in strict_cols if c in written_payload}
-                actual = _read_cells(worksheet, candidate, verify_cols)
-                comment_letter = colmap.get("comment")
-                got_comment = actual.get(comment_letter, "") if comment_letter else ""
-                if must_write and comment_is_bare_number(got_comment):
-                    last_verify_error = (
-                        f"Коментар QA у рядку {candidate} зберігся лише числом."
-                    )
-                    row = candidate
-                    continue
-                if _payload_matches(
-                    written_payload, actual, strict_cols=written_strict or None
-                ):
-                    committed_row = candidate
-                    break
-                last_verify_error = (
-                    f"Верифікація запису не пройшла (рядок {candidate}, "
-                    f"{route['title']}/{call_type}, спроба {attempt + 1})."
+            id_vals = sheets_retry(worksheet.col_values, id_col_index)
+            date_vals = sheets_retry(worksheet.col_values, date_col_index)
+            mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
+            matches = match_journal_rows(
+                id_vals,
+                date_vals,
+                mgr_vals,
+                client_id=client_id,
+                call_date=call_date,
+                manager=manager_name,
+                start_row=start_row,
+            )
+            if len(matches) > 1:
+                raise VipJournalError(
+                    "Кілька рядків з тим самим ID, датою і менеджером "
+                    f"({', '.join(str(n) for n in matches)}). Випадковий рядок не перезаписується."
                 )
-                logger.warning(
-                    "VIP journal verify mismatch analysis_id=%s row=%s attempt=%s actual=%s colmap=%s",
-                    analysis_id,
-                    candidate,
-                    attempt + 1,
-                    {k: actual.get(k) for k in sorted(written_strict)},
-                    colmap,
-                )
-                if not must_write and _normalize_verify(actual.get(id_col)) == _normalize_verify(
-                    written_payload.get(id_col)
-                ):
-                    committed_row = candidate
-                    break
-                row = candidate
+            repair_row = matches[0] if len(matches) == 1 else None
+            row_is_existing = repair_row is not None
 
-            if committed_row is None:
-                raise VipJournalError(last_verify_error or "Не вдалося записати рядок журналу.")
-            row = committed_row
+            if repair_row is not None:
+                candidate = repair_row
+            else:
+                comment_vals = sheets_retry(worksheet.col_values, comment_col_index)
+                score_vals = sheets_retry(worksheet.col_values, score_col_index)
+                candidate = find_next_journal_row(
+                    id_vals,
+                    start_row=start_row,
+                    extra_cols=[mgr_vals, date_vals, score_vals, comment_vals],
+                )
+            written_payload = _write_cells_resilient(
+                worksheet,
+                candidate,
+                payload,
+                must_write=must_write or None,
+                call_type=call_type,
+                existing=row_is_existing,
+                comment_letter=comment_letter,
+                sheet_title=route["title"],
+                account=account,
+            )
+            identity_fields = ("client_id", "call_date", "manager")
+            verify_letters = list(written_payload.keys())
+            for field in identity_fields:
+                letter = colmap.get(field)
+                if letter and letter not in _NEVER_WRITE_LETTERS and letter not in verify_letters:
+                    verify_letters.append(letter)
+            actual = _read_cells(worksheet, candidate, verify_letters)
+            got_comment = actual.get(comment_letter, "") if comment_letter else ""
+            if comment_letter and comment_is_bare_number(got_comment):
+                raise VipJournalError(
+                    f"Коментар QA у {route['title']} {comment_letter}{candidate} "
+                    "зберігся лише числом."
+                )
+            written_strict = {col for col in strict_cols if col in written_payload}
+            if not _payload_matches(
+                written_payload, actual, strict_cols=written_strict or None
+            ):
+                raise VipJournalError(
+                    f"Верифікація запису не пройшла "
+                    f"({route['title']} рядок {candidate}, {call_type})."
+                )
+            for field in identity_fields:
+                letter = colmap.get(field)
+                want = fields.get(field)
+                if not letter or want in ("", None):
+                    continue
+                if _normalize_verify(actual.get(letter)) != _normalize_verify(want):
+                    raise VipJournalError(
+                        f"Після запису {route['title']} {letter}{candidate} "
+                        "не збігається з карткою."
+                    )
+            row = candidate
+            ensure_total_formula(
+                worksheet,
+                call_type,
+                row,
+                sheet_title=route["title"],
+                account=account,
+            )
 
             mapping = {
                 "spreadsheet_id": VIP_JOURNAL_SHEET_ID,
