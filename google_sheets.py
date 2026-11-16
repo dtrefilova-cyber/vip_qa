@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import socket
 import time
 import unicodedata
@@ -244,6 +245,52 @@ def clean_sheet_cell(value) -> str:
     return text.replace("\ufeff", "").strip()
 
 
+_SHEET_RATIO_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)")
+
+
+def neutralize_sheet_ratios(text: str) -> str:
+    """Sheets зберігає «10/10» як число 10. У тексті лишається «10 із 10»."""
+    return _SHEET_RATIO_RE.sub(r"\1 із \2", str(text or ""))
+
+
+def comment_contains_slash_ratio(value) -> bool:
+    return bool(_SHEET_RATIO_RE.search(str(value if value is not None else "")))
+
+
+def _is_number_token(text: str) -> bool:
+    if not text or any(ch not in "0123456789.-+" for ch in text):
+        return False
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def comment_is_bare_number(value) -> bool:
+    """Коментар, який Sheets покаже як 10 або 0,0: голе число чи самий дріб 10/10."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return False
+    compact = text.replace(" ", "")
+    normalized = compact.replace(",", ".")
+    if "/" in normalized:
+        left, right = normalized.split("/", 1)
+        if _is_number_token(left) and _is_number_token(right):
+            return True
+    if _is_number_token(normalized):
+        return True
+    return bool(re.fullmatch(r"\d+(?:[.,]\d+)?\s+із\s+\d+(?:[.,]\d+)?", text.replace(",", ".")))
+
+
+def prepare_sheet_comment(value) -> str:
+    """Текст коментаря для RAW. Голе число і дріб N/M у таблицю не потрапляють."""
+    text = neutralize_sheet_ratios(str(value or "")).strip()
+    if not text or comment_is_bare_number(text) or comment_contains_slash_ratio(text):
+        return ""
+    return text
+
+
 def _is_managers_header_row(row: list) -> bool:
     cells = [clean_sheet_cell(c).casefold() for c in (row or [])[:3]]
     if not cells:
@@ -326,7 +373,8 @@ def format_vip_score_comment_for_sheet(verdict_data):
         text = str(flag or "").strip()
         if text:
             parts.append(f"На перевірку ТЛ: {text}")
-    return "\n".join(parts) if parts else "— Дзвінок без зауважень."
+    text = "\n".join(parts) if parts else "— Дзвінок без зауважень."
+    return prepare_sheet_comment(text) or "— Дзвінок без зауважень."
 
 
 def format_vip_result_cell(row_data) -> str:
@@ -334,15 +382,15 @@ def format_vip_result_cell(row_data) -> str:
     total = row_data.get("total_score")
     max_score = row_data.get("max_score")
     if total is None and row_data.get("result"):
-        return str(row_data.get("result"))
+        return neutralize_sheet_ratios(str(row_data.get("result")))
     try:
         if total is not None and max_score is not None:
-            return f"{float(total):g}/{float(max_score):g}"
+            return f"{float(total):g} із {float(max_score):g}"
         if total is not None:
             return f"{float(total):g}"
     except (TypeError, ValueError):
         pass
-    return str(row_data.get("result") or "")
+    return neutralize_sheet_ratios(str(row_data.get("result") or ""))
 
 
 def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_name="RESULTS"):
@@ -351,21 +399,32 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
 
     # A–G як у чинному аркуші RESULTS: F = бали (не заливка GREEN/RED)
     result_cell = format_vip_result_cell(row_data)
-    values = [
+    comment = prepare_sheet_comment(row_data.get("comment"))
+    client_id = str(row_data.get("client_id") or "")
+    if client_id[:1].isdigit():
+        client_id = f"'{client_id}"
+    identity = [
         row_data.get("project", ""),
         row_data.get("tl", ""),
         row_data.get("manager", ""),
-        row_data.get("client_id", ""),
+        client_id,
         row_data.get("call_date", ""),
         result_cell,
-        row_data.get("comment", ""),
     ]
     try:
         sheets_retry(
             worksheet.update,
-            range_name=f"A{next_row}:G{next_row}",
-            values=[values],
+            range_name=f"A{next_row}:F{next_row}",
+            values=[identity],
+            value_input_option="USER_ENTERED",
         )
+        if comment:
+            sheets_retry(
+                worksheet.update,
+                range_name=f"G{next_row}",
+                values=[[comment]],
+                value_input_option="RAW",
+            )
     except Exception as e:
         return str(e)
 
@@ -389,7 +448,7 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
 MANUAL_TRACKING_FIRST_COL = 3  # C (B уже зайнята на аркуші RESULTS коротких)
 MANUAL_TRACKING_COMMENT_START_ROW = 13
 MANUAL_TRACKING_CRITICAL_MARK = "критична"
-MANUAL_TRACKING_CRITICAL_SUMMARY = "0/30"
+MANUAL_TRACKING_CRITICAL_SUMMARY = "0 із 30"
 
 FRIENDLY_MANUAL_TRACKING_FIRST_COL = 2  # B (новий аркуш; якщо зайнята — далі)
 FRIENDLY_MANUAL_TRACKING_COMMENT_START_ROW = 15
@@ -557,7 +616,7 @@ def build_manual_tracking_comment_text(call: dict, verdict_data: dict) -> str:
         scored = format_vip_score_comment_for_sheet(verdict_data)
         if scored and scored != "— Дзвінок без зауважень.":
             parts.append(scored)
-    return "\n".join(parts) if parts else ""
+    return prepare_sheet_comment("\n".join(parts))
 
 
 def build_friendly_manual_tracking_column_values(
@@ -606,7 +665,7 @@ def build_friendly_manual_tracking_comment_text(call: dict, verdict_data: dict) 
         scored = format_vip_score_comment_for_sheet(verdict_data)
         if scored and scored != "— Дзвінок без зауважень.":
             parts.append(scored)
-    return "\n".join(parts) if parts else ""
+    return prepare_sheet_comment("\n".join(parts))
 
 
 def write_vip_short_manual_tracking(
@@ -656,12 +715,16 @@ def write_vip_short_manual_tracking(
     comment_row = find_next_comment_row(
         col_a, MANUAL_TRACKING_COMMENT_START_ROW, col_b_values=col_b
     )
-    comment_text = build_manual_tracking_comment_text(call, verdict_data)
+    comment_text = prepare_sheet_comment(build_manual_tracking_comment_text(call, verdict_data))
+    client_id = str(call.get("client_id") or "")
+    if client_id[:1].isdigit():
+        client_id = f"'{client_id}"
     try:
         sheets_retry(
             worksheet.update,
             range_name=f"A{comment_row}:B{comment_row}",
-            values=[[comment_text, str(call.get("client_id") or "")]],
+            values=[[comment_text, client_id]],
+            value_input_option="RAW",
         )
     except Exception as e:
         return str(e)
@@ -725,12 +788,18 @@ def write_vip_friendly_manual_tracking(
         FRIENDLY_MANUAL_TRACKING_COMMENT_START_ROW,
         col_b_values=col_b,
     )
-    comment_text = build_friendly_manual_tracking_comment_text(call, verdict_data)
+    comment_text = prepare_sheet_comment(
+        build_friendly_manual_tracking_comment_text(call, verdict_data)
+    )
+    client_id = str(call.get("client_id") or "")
+    if client_id[:1].isdigit():
+        client_id = f"'{client_id}"
     try:
         sheets_retry(
             worksheet.update,
             range_name=f"A{comment_row}:B{comment_row}",
-            values=[[comment_text, str(call.get("client_id") or "")]],
+            values=[[comment_text, client_id]],
+            value_input_option="RAW",
         )
     except Exception as e:
         return str(e)

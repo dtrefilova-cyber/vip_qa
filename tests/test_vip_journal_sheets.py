@@ -501,6 +501,8 @@ def test_short_slip_headers_keep_computed_score_including_zero():
         assert payload["G"] == 0.0
         assert "J" not in payload
         assert "Злив" in payload["L"]
+        assert "0/10" not in payload["L"]
+        assert "0 із 10" in payload["L"]
 
 
 def test_short_payload_refuses_missing_slip_column():
@@ -610,6 +612,64 @@ def test_validation_error_quotes_sheet_range_and_account():
     assert ok.cells["L6"] == "повний коментар"
     assert ok.cells["F6"] == 5.0
     assert ok.updates[-1][0] == "RAW"
+
+
+def test_comment_payload_rejects_bare_ten_and_slash_ratio():
+    """Коментар, який Sheets збереже як число 10, не може потрапити в payload."""
+    import re
+    from datetime import date
+
+    from google_sheets import format_vip_result_cell, format_vip_score_comment_for_sheet
+
+    ratio = re.compile(r"\d+(?:[.,]\d+)?\s*/\s*\d+(?:[.,]\d+)?")
+    scores = {"contact": 5.0, "slip_handling": 10.0, "prep": 10.0, "closing": 2.5}
+    for bare in ("10", "0,0", "0.0", "10/10", "2.5/5", "0/30", "10 із 10"):
+        with pytest.raises(VipJournalError, match="числом|N/M"):
+            build_short_row_payload(
+                client_id="8545688",
+                call_date=date(2026, 11, 9),
+                manager="Войтер Тетяна",
+                tl="TL",
+                scores=scores,
+                check_date=date(2026, 11, 16),
+                qa_comment=bare,
+            )
+
+    formatted = format_vip_score_comment_for_sheet(
+        {
+            "criteria": [
+                {
+                    "label": "Робота зі зливом",
+                    "points": 10,
+                    "max_points": 10,
+                    "reasons": ["клієнт лишився на лінії"],
+                }
+            ]
+        }
+    )
+    assert formatted.strip() not in {"10", "10/10", "0,0"}
+    assert ratio.search(formatted) is None
+    assert "10 із 10" in formatted
+
+    payload = build_short_row_payload(
+        client_id="8545688",
+        call_date=date(2026, 11, 9),
+        manager="Войтер Тетяна",
+        tl="TL",
+        scores=scores,
+        check_date=date(2026, 11, 16),
+        qa_comment=formatted,
+    )
+    stored = str(payload["L"])
+    assert stored.strip() not in {"10", "10/10"}
+    assert ratio.search(stored) is None
+    assert "J" not in payload
+    assert "E" not in payload
+    assert payload["G"] == 10.0
+
+    result = format_vip_result_cell({"total_score": 10, "max_score": 10})
+    assert result == "10 із 10"
+    assert ratio.search(result) is None
 
 
 def test_short_payload_rejects_comment_that_is_only_a_number():

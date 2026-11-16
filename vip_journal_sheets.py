@@ -29,7 +29,14 @@ from constants import (
     VIP_JOURNAL_TZ,
     resolve_call_type_key,
 )
-from google_sheets import clean_sheet_cell, col_index_to_letter, sheets_retry
+from google_sheets import (
+    clean_sheet_cell,
+    col_index_to_letter,
+    comment_contains_slash_ratio,
+    comment_is_bare_number,
+    prepare_sheet_comment,
+    sheets_retry,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -629,9 +636,7 @@ def build_short_field_values(
         "reviewer": reviewer,
         "check_date": _as_sheet_date(check_date),
     }
-    comment = neutralize_sheet_ratios(str(qa_comment or "")).strip()
-    if comment_is_bare_number(comment):
-        comment = ""
+    comment = prepare_sheet_comment(qa_comment)
     if comment:
         fields["comment"] = comment
     return fields
@@ -664,9 +669,7 @@ def build_friendly_field_values(
         "reviewer": reviewer,
         "check_date": _as_sheet_date(check_date),
     }
-    comment = neutralize_sheet_ratios(str(qa_comment or "")).strip()
-    if comment_is_bare_number(comment):
-        comment = ""
+    comment = prepare_sheet_comment(qa_comment)
     if comment:
         fields["comment"] = comment
     return fields
@@ -729,47 +732,6 @@ def fields_to_letter_payload(
     return payload
 
 
-def _is_number_token(text: str) -> bool:
-    if not text or any(ch not in "0123456789.-+" for ch in text):
-        return False
-    try:
-        float(text)
-    except ValueError:
-        return False
-    return True
-
-
-def neutralize_sheet_ratios(text: str) -> str:
-    """Sheets зберігає «10/10» як число 10. У коментарі лишається «10 із 10»."""
-    import re
-
-    return re.sub(
-        r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)",
-        r"\1 із \2",
-        str(text or ""),
-    )
-
-
-def comment_is_bare_number(value) -> bool:
-    """Коментар, який Sheets покаже як 10 або 0,0: голе число чи самий дріб 10/10."""
-    import re
-
-    text = str(value if value is not None else "").strip()
-    if not text:
-        return False
-    compact = text.replace(" ", "")
-    normalized = compact.replace(",", ".")
-    if "/" in normalized:
-        left, right = normalized.split("/", 1)
-        if _is_number_token(left) and _is_number_token(right):
-            return True
-    if _is_number_token(normalized):
-        return True
-    return bool(
-        re.fullmatch(r"\d+(?:[.,]\d+)?\s+із\s+\d+(?:[.,]\d+)?", text.replace(",", "."))
-    )
-
-
 def assert_short_scores(scores: dict) -> None:
     missing = [key for key in _SHORT_KEYS if scores.get(key) is None]
     if missing:
@@ -810,7 +772,13 @@ def build_short_row_payload(
     required = set(_SHORT_KEYS)
     if comment:
         required.add("comment")
-    return fields_to_letter_payload(fields, mapping, required_fields=required)
+    payload = fields_to_letter_payload(fields, mapping, required_fields=required)
+    stored = payload.get(mapping.get("comment") or "")
+    if stored is not None and (
+        comment_is_bare_number(stored) or comment_contains_slash_ratio(stored)
+    ):
+        raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
+    return payload
 
 
 def build_friendly_row_payload(
@@ -836,7 +804,13 @@ def build_friendly_row_payload(
         qa_comment=qa_comment,
     )
     mapping = colmap or _FALLBACK_FRIENDLY_COLS
-    return fields_to_letter_payload(fields, mapping)
+    payload = fields_to_letter_payload(fields, mapping)
+    stored = payload.get(mapping.get("comment") or "")
+    if stored is not None and (
+        comment_is_bare_number(stored) or comment_contains_slash_ratio(stored)
+    ):
+        raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
+    return payload
 
 
 def _load_dedup_store() -> dict:
@@ -980,21 +954,34 @@ def plan_journal_rectangles(
     for col in allowed:
         if col not in payload or payload[col] == "" or payload[col] is None:
             continue
-        mode = "RAW" if col == comment_letter else "USER_ENTERED"
+        value = payload[col]
+        if isinstance(value, str) and (
+            col == comment_letter or comment_contains_slash_ratio(value) or comment_is_bare_number(value)
+        ):
+            mode = "RAW"
+        else:
+            mode = "USER_ENTERED"
+        if col == comment_letter or (isinstance(value, str) and comment_contains_slash_ratio(value)):
+            value = prepare_sheet_comment(value)
+            if not value:
+                raise VipJournalError(
+                    "Коментар QA не може бути лише числом або дробом N/M."
+                )
+            payload = {**payload, col: value}
         if (
             spans
             and spans[-1]["mode"] == mode
             and _col_letter_to_index(col) == _col_letter_to_index(spans[-1]["end"]) + 1
         ):
             spans[-1]["end"] = col
-            spans[-1]["values"].append(payload[col])
+            spans[-1]["values"].append(value)
             spans[-1]["cols"].append(col)
             continue
         spans.append(
             {
                 "start": col,
                 "end": col,
-                "values": [payload[col]],
+                "values": [value],
                 "cols": [col],
                 "mode": mode,
             }
@@ -1134,7 +1121,11 @@ def _write_cells_resilient(
         sheet_title=sheet_title or getattr(worksheet, "title", ""),
         account=account,
     )
-    return {col: pending[col] for col in written_cols}
+    written = {col: pending[col] for col in written_cols}
+    for span in spans:
+        for col, value in zip(span["cols"], span["values"]):
+            written[col] = value
+    return written
 
 
 def _read_cells(
