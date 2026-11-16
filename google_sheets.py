@@ -245,11 +245,11 @@ def clean_sheet_cell(value) -> str:
     return text.replace("\ufeff", "").strip()
 
 
-_SHEET_RATIO_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)")
+_SHEET_RATIO_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*[/⁄∕／]\s*(\d+(?:[.,]\d+)?)")
 
 
 def neutralize_sheet_ratios(text: str) -> str:
-    """Sheets зберігає «10/10» як число 10. У тексті лишається «10 із 10»."""
+    """Sheets зберігає «10/10» і «7,5/7,5» як число. У тексті лишається «N із M»."""
     return _SHEET_RATIO_RE.sub(r"\1 із \2", str(text or ""))
 
 
@@ -273,7 +273,7 @@ def comment_is_bare_number(value) -> bool:
     if not text:
         return False
     compact = text.replace(" ", "")
-    normalized = compact.replace(",", ".")
+    normalized = compact.replace(",", ".").replace("⁄", "/").replace("∕", "/").replace("／", "/")
     if "/" in normalized:
         left, right = normalized.split("/", 1)
         if _is_number_token(left) and _is_number_token(right):
@@ -335,16 +335,22 @@ VIP_RESULT_CELL_COLORS = {
 
 
 def format_vip_short_comment_for_sheet(verdict_data):
-    """Legacy alias — supports old GREEN/RED and new score payloads."""
+    """Коментар короткого дзвінка. Той самий текст, що й friendly: «N із M», без N/M."""
+    return format_vip_score_comment_for_sheet(verdict_data)
+
+
+def format_vip_friendly_comment_for_sheet(verdict_data):
+    """Коментар friendly. Повний розбір усіх критеріїв, без дробу N/M і без обрізання."""
     return format_vip_score_comment_for_sheet(verdict_data)
 
 
 def _sheet_points(value) -> str:
+    """Бал у коментарі: «7,5», ніколи «7,5/7,5»."""
     try:
-        return f"{float(value):g}"
+        return f"{float(value):g}".replace(".", ",")
     except (TypeError, ValueError):
         text = str(value).strip() if value is not None else ""
-        return text or "—"
+        return neutralize_sheet_ratios(text) or "—"
 
 
 def format_vip_score_comment_for_sheet(verdict_data):

@@ -672,6 +672,101 @@ def test_comment_payload_rejects_bare_ten_and_slash_ratio():
     assert ratio.search(result) is None
 
 
+def test_friendly_and_short_comments_reject_ratio_and_bare_number():
+    """І короткий, і friendly коментар: не «10» і не «7,5/7,5» / «5/5»."""
+    import re
+    from datetime import date
+
+    from google_sheets import (
+        format_vip_friendly_comment_for_sheet,
+        format_vip_score_comment_for_sheet,
+    )
+
+    ratio = re.compile(r"\d+(?:[.,]\d+)?\s*[/⁄∕／]\s*\d+(?:[.,]\d+)?")
+    reason = "Повний текст причини, який не обрізається посеред фрази про депозит."
+    friendly_verdict = {
+        "call_type": "vip_friendly",
+        "criteria": [
+            {
+                "key": "personal_approach",
+                "label": "Індивідуальний підхід",
+                "points": 7.5,
+                "max_points": 7.5,
+                "reasons": [reason],
+            },
+            {
+                "key": "contact",
+                "label": "Встановлення контакту",
+                "points": 5,
+                "max_points": 5,
+                "reasons": ["Привітання і проєкт є"],
+            },
+        ],
+    }
+    friendly_comment = format_vip_friendly_comment_for_sheet(friendly_verdict)
+    short_comment = format_vip_score_comment_for_sheet(
+        {
+            "criteria": [
+                {
+                    "label": "Робота зі зливом",
+                    "points": 10,
+                    "max_points": 10,
+                    "reasons": [reason],
+                }
+            ]
+        }
+    )
+    for text in (friendly_comment, short_comment):
+        assert ratio.search(text) is None
+        assert text.strip() not in {"10", "5", "5/5", "7,5/7,5", "7.5/7.5"}
+        assert "із" in text
+        assert reason in text
+    assert "7,5 із 7,5" in friendly_comment
+    assert "5 із 5" in friendly_comment
+
+    scores = {
+        "contact": 5.0,
+        "friendly_development": 7.5,
+        "personal_approach": 7.5,
+        "call_to_action": 5.0,
+        "bonus_offer": 5.0,
+        "prep": 10.0,
+        "closing": 5.0,
+        "ease": 7.5,
+    }
+    for bare in ("10", "5/5", "7,5/7,5", "7.5/7.5", "10/10"):
+        with pytest.raises(VipJournalError, match="числом|N/M"):
+            build_friendly_row_payload(
+                client_id="5216367",
+                call_date=date(2026, 11, 16),
+                manager="Voiter I.",
+                tl="Ivan I.",
+                scores=scores,
+                check_date=date(2026, 11, 16),
+                qa_comment=bare,
+            )
+    payload = build_friendly_row_payload(
+        client_id="7340116",
+        call_date=date(2026, 11, 16),
+        manager="Voiter I.",
+        tl="Ivan I.",
+        scores=scores,
+        check_date=date(2026, 11, 16),
+        qa_comment="— Підхід: 7,5/7,5\n— Контакт: 5/5 (" + reason + ")",
+    )
+    stored = str(payload["AD"])
+    assert ratio.search(stored) is None
+    assert stored.strip() not in {"10", "5", "5/5"}
+    assert "7,5 із 7,5" in stored
+    assert "5 із 5" in stored
+    assert reason in stored
+    assert payload["R"] == "Ivan I."
+    assert "S" not in payload
+    assert "AB" not in payload
+    assert payload["U"] == 7.5
+    assert 0 not in payload.values()
+
+
 def test_short_payload_rejects_comment_that_is_only_a_number():
     """Коментар «10» або «0,0» не може бути успішним payload: саме так 777 лишає дірки."""
     from datetime import date
@@ -795,7 +890,7 @@ def test_rectangles_never_include_status_or_formula():
     existing = plan_journal_rectangles(
         short_payload, "short", existing=True, comment_letter="L"
     )
-    assert [col for span in existing for col in span["cols"]] == list("FGHI") + ["K", "L", "M"]
+    assert [col for span in existing for col in span["cols"]] == list("CD") + list("FGHI") + ["K", "L", "M"]
 
     friendly = {
         "O": "'1",
@@ -823,8 +918,10 @@ def test_rectangles_never_include_status_or_formula():
         friendly, "friendly", existing=True, comment_letter="AD"
     )
     scored_letters = [col for span in scored for col in span["cols"]]
-    assert scored_letters[0] == "T"
+    assert scored_letters[:2] == ["Q", "R"]
+    assert "T" in scored_letters
     assert "O" not in scored_letters
+    assert "S" not in scored_letters
     assert "AB" not in scored_letters
 
 

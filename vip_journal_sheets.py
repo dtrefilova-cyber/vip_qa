@@ -460,16 +460,24 @@ def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None
     Завжди є розбір балів. На короткому дзвінку до нього додаються «Важливе»
     і ручний коментар картки — без обрізання. Friendly лишає лише розбір балів.
     """
-    from google_sheets import format_vip_score_comment_for_sheet
+    from google_sheets import (
+        format_vip_friendly_comment_for_sheet,
+        format_vip_score_comment_for_sheet,
+    )
 
-    scored = str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
-    parts = [scored] if scored else []
     card = call or {}
     call_type = resolve_journal_call_type(
         card.get("journal_call_type")
         or card.get("vip_call_type")
         or (verdict_data or {}).get("call_type")
     )
+    formatter = (
+        format_vip_friendly_comment_for_sheet
+        if call_type == VIP_JOURNAL_CALL_TYPE_FRIENDLY
+        else format_vip_score_comment_for_sheet
+    )
+    scored = str(formatter(verdict_data or {}) or "").strip()
+    parts = [scored] if scored else []
     if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
         note = str(card.get("important_note") or "").strip()
         manual = str(card.get("qa_comment") or "").strip()
@@ -489,7 +497,7 @@ def _match_header_field(header: str) -> str | None:
     if not text:
         return None
     # Точні короткі заголовки (інакше «Статус від TL» / «менеджер» у чужих фразах).
-    if text == "tl":
+    if text in {"tl", "тл"}:
         return "tl"
     if text in {"менеджер", "manager"}:
         return "manager"
@@ -573,6 +581,13 @@ def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str
     if not all(k in friendly for k in ("client_id", "manager", "contact", "ease")):
         logger.warning("VIP journal friendly headers incomplete; using fallback letters")
         friendly = dict(_FALLBACK_FRIENDLY_COLS)
+    else:
+        used = set(friendly.values())
+        for field, letter in _FALLBACK_FRIENDLY_COLS.items():
+            if field == "total_score" or field in friendly or letter in used:
+                continue
+            friendly[field] = letter
+            used.add(letter)
 
     # У skip тільки реальні колонки формули з заголовка (не здогадки I/J/Z/AA/AB —
     # інакше банимо «Завершення» на I після insert).
@@ -757,7 +772,7 @@ def build_short_row_payload(
     assert_short_scores(scores)
     comment = str(qa_comment or "").strip()
     if comment_is_bare_number(comment):
-        raise VipJournalError("Коментар QA не може бути лише числом.")
+        raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
     fields = build_short_field_values(
         client_id=client_id,
         call_date=call_date,
@@ -774,8 +789,10 @@ def build_short_row_payload(
         required.add("comment")
     payload = fields_to_letter_payload(fields, mapping, required_fields=required)
     stored = payload.get(mapping.get("comment") or "")
-    if stored is not None and (
-        comment_is_bare_number(stored) or comment_contains_slash_ratio(stored)
+    if comment and (
+        stored is None
+        or comment_is_bare_number(stored)
+        or comment_contains_slash_ratio(stored)
     ):
         raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
     return payload
@@ -793,6 +810,9 @@ def build_friendly_row_payload(
     qa_comment: str = "",
     colmap: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    comment = str(qa_comment or "").strip()
+    if comment_is_bare_number(comment):
+        raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
     fields = build_friendly_field_values(
         client_id=client_id,
         call_date=call_date,
@@ -801,13 +821,15 @@ def build_friendly_row_payload(
         scores=scores,
         check_date=check_date,
         reviewer=reviewer,
-        qa_comment=qa_comment,
+        qa_comment=comment,
     )
     mapping = colmap or _FALLBACK_FRIENDLY_COLS
     payload = fields_to_letter_payload(fields, mapping)
     stored = payload.get(mapping.get("comment") or "")
-    if stored is not None and (
-        comment_is_bare_number(stored) or comment_contains_slash_ratio(stored)
+    if comment and (
+        stored is None
+        or comment_is_bare_number(stored)
+        or comment_contains_slash_ratio(stored)
     ):
         raise VipJournalError("Коментар QA не може бути лише числом або дробом N/M.")
     return payload
@@ -914,10 +936,10 @@ def allowed_write_columns(call_type: str, *, existing: bool) -> list[str]:
     """Колонки автоматичного запису. E/S і J/AB сюди не входять."""
     if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
         if existing:
-            return list("FGHI") + list("KLM")
+            return list("CD") + list("FGHI") + list("KLM")
         return list("ABCD") + list("FGHI") + list("KLM")
     if existing:
-        return _letters_between("T", "AA") + _letters_between("AC", "AE")
+        return list("QR") + _letters_between("T", "AA") + _letters_between("AC", "AE")
     return (
         _letters_between("O", "R")
         + _letters_between("T", "AA")
@@ -1261,16 +1283,23 @@ def write_vip_journal_result(
         )
         manager_name = clean_sheet_cell(manager_row.get("manager"))
         tl_name = clean_sheet_cell(manager_row.get("tl"))
+        if not tl_name:
+            raise VipJournalError(
+                f"У «{VIP_JOURNAL_MANAGERS_WORKSHEET}» немає TL для {manager_name!r}."
+            )
 
-        qa_comment = build_journal_qa_comment(call, verdict_data)
+        qa_comment = prepare_sheet_comment(build_journal_qa_comment(call, verdict_data))
+        if (
+            not qa_comment
+            or comment_is_bare_number(qa_comment)
+            or comment_contains_slash_ratio(qa_comment)
+        ):
+            raise VipJournalError(
+                "Коментар QA порожній, лише число або містить дріб N/M."
+            )
         start_row = int(route["start_row"])
         if repair_row is not None and repair_row < start_row:
             repair_row = None
-        if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
-            if comment_is_bare_number(qa_comment) or not str(qa_comment or "").strip():
-                raise VipJournalError(
-                    "Коментар QA порожній або лише число — рядок не записується."
-                )
 
         with _WRITE_LOCK:
             worksheet = _open_project_worksheet(google_client, route)
@@ -1296,7 +1325,7 @@ def write_vip_journal_result(
                     qa_comment=qa_comment,
                 )
                 required_fields.update(_SHORT_KEYS)
-                required_fields.add("comment")
+                required_fields.update({"comment", "tl"})
             else:
                 scores = extract_friendly_scores(verdict_data)
                 fields = build_friendly_field_values(
@@ -1308,6 +1337,7 @@ def write_vip_journal_result(
                     check_date=check_date,
                     qa_comment=qa_comment,
                 )
+                required_fields.update({"comment", "tl"})
             payload = fields_to_letter_payload(
                 fields,
                 colmap,
@@ -1378,7 +1408,7 @@ def write_vip_journal_result(
                 sheet_title=route["title"],
                 account=account,
             )
-            identity_fields = ("client_id", "call_date", "manager")
+            identity_fields = ("client_id", "call_date", "manager", "tl")
             verify_letters = list(written_payload.keys())
             for field in identity_fields:
                 letter = colmap.get(field)
@@ -1386,10 +1416,12 @@ def write_vip_journal_result(
                     verify_letters.append(letter)
             actual = _read_cells(worksheet, candidate, verify_letters)
             got_comment = actual.get(comment_letter, "") if comment_letter else ""
-            if comment_letter and comment_is_bare_number(got_comment):
+            if comment_letter and (
+                comment_is_bare_number(got_comment) or comment_contains_slash_ratio(got_comment)
+            ):
                 raise VipJournalError(
                     f"Коментар QA у {route['title']} {comment_letter}{candidate} "
-                    "зберігся лише числом."
+                    "зберігся числом або дробом N/M."
                 )
             written_strict = {col for col in strict_cols if col in written_payload}
             if not _payload_matches(
