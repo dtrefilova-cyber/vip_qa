@@ -13,8 +13,8 @@ from core.vip_short_scoring import VipShort90sFactsBundle
 
 logger = logging.getLogger(__name__)
 
-VIP_SHORT_FACTS_CACHE_TAG = "vip_short90s_r5_20261028"
-VIP_FRIENDLY_FACTS_CACHE_TAG = "vip_friendly_full1_20261103"
+VIP_SHORT_FACTS_CACHE_TAG = "vip_short90s_r6_20261117"
+VIP_FRIENDLY_FACTS_CACHE_TAG = "vip_friendly_full2_20261117"
 recent_usages: list[dict] = []
 CTA_FACTS_MODEL = "gpt-5.4-mini"
 

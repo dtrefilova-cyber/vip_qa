@@ -118,7 +118,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 LOG_SHEET_ID = "1LTje88l2rnirwHn-4WuVlP6Ue0ndJUWIGleWA8Wrk3k"
 OPENAI_ANALYSIS_MODEL = read_secret("OPENAI_MODEL", "gpt-5.4-mini")
-ANALYSIS_CACHE_VERSION = f"v3.8-{OPENAI_ANALYSIS_MODEL}"
+ANALYSIS_CACHE_VERSION = f"v3.9-{OPENAI_ANALYSIS_MODEL}"
 OPENAI_TRANSCRIPT_MODEL = read_secret("OPENAI_TRANSCRIPT_MODEL", "gpt-4.1-mini")
 OPENAI_MAX_OUTPUT_TOKENS = int(read_secret("OPENAI_MAX_OUTPUT_TOKENS", 3500))
 DEEPGRAM_MODEL = "nova-3"
@@ -334,15 +334,38 @@ def _count_manager_long_pauses(all_words, manager_channel="ch_0", threshold=3.0)
     return count
 
 
+def _channel_metrics(data: dict) -> dict:
+    metrics = {}
+    channels = (data.get("results") or {}).get("channels") or []
+    for index, channel in enumerate(channels):
+        alternative = (channel.get("alternatives") or [{}])[0]
+        words = alternative.get("words") or []
+        confidences = [
+            word.get("confidence")
+            for word in words
+            if isinstance(word.get("confidence"), (int, float))
+        ]
+        text = (alternative.get("transcript") or "").strip()
+        if not text:
+            text = " ".join(str(word.get("word") or "") for word in words)
+        metrics[index] = {
+            "confidence": (sum(confidences) / len(confidences)) if confidences else float(alternative.get("confidence") or 0),
+            "latin_ratio": _latin_ratio(text),
+        }
+    return metrics
+
+
 def _parse_deepgram_response(data: dict) -> dict:
     duration = data.get("metadata", {}).get("duration", 0.0)
     results = data.get("results", {})
     channels = results.get("channels", [])
     utterances = results.get("utterances", [])
+    metrics = _channel_metrics(data)
 
     if utterances:
         plain_lines = []
         timed_lines = []
+        segments = []
         for utterance in utterances:
             channel = utterance.get("channel")
             speaker_id = utterance.get("speaker", 0)
@@ -357,6 +380,14 @@ def _parse_deepgram_response(data: dict) -> dict:
             timed_lines.append(
                 _format_timed_speaker_line(speaker, text, utterance.get("start"))
             )
+            segments.append(
+                {
+                    "speaker": speaker,
+                    "start": utterance.get("start") or 0,
+                    "text": text,
+                    "channel": channel if channel is not None else speaker_id,
+                }
+            )
         if plain_lines:
             transcript_text = _join_transcript_lines(plain_lines)
             return {
@@ -366,6 +397,8 @@ def _parse_deepgram_response(data: dict) -> dict:
                 "timestamped_transcript": _join_transcript_lines(timed_lines),
                 "duration": duration,
                 "long_pause_count": 0,
+                "segments": segments,
+                "channel_metrics": metrics,
             }
 
     all_words = []
@@ -401,6 +434,11 @@ def _parse_deepgram_response(data: dict) -> dict:
                 "timestamped_transcript": transcript_text,
                 "duration": duration,
                 "long_pause_count": 0,
+                "segments": [
+                    {"speaker": line.split(":", 1)[0], "start": 0, "text": line.split(":", 1)[-1].strip(), "channel": index}
+                    for index, line in enumerate(fallback_lines)
+                ],
+                "channel_metrics": metrics,
             }
         if duration and duration > 0:
             error = (
@@ -417,6 +455,7 @@ def _parse_deepgram_response(data: dict) -> dict:
     all_words.sort(key=lambda x: x["start"])
     plain_lines = []
     timed_lines = []
+    segments = []
     current_speaker = all_words[0]["speaker"]
     current_phrase = []
     phrase_start = all_words[0]["start"]
@@ -432,6 +471,14 @@ def _parse_deepgram_response(data: dict) -> dict:
                 timed_lines.append(
                     _format_timed_speaker_line(current_speaker, phrase, phrase_start)
                 )
+                segments.append(
+                    {
+                        "speaker": current_speaker,
+                        "start": phrase_start,
+                        "text": phrase,
+                        "channel": int(str(current_speaker).split("_")[-1]) if str(current_speaker).startswith("ch_") else 0,
+                    }
+                )
             current_phrase = []
             current_speaker = speaker
             phrase_start = word["start"]
@@ -443,6 +490,14 @@ def _parse_deepgram_response(data: dict) -> dict:
         plain_lines.append(f"{current_speaker}: {phrase}")
         timed_lines.append(
             _format_timed_speaker_line(current_speaker, phrase, phrase_start)
+        )
+        segments.append(
+            {
+                "speaker": current_speaker,
+                "start": phrase_start,
+                "text": phrase,
+                "channel": int(str(current_speaker).split("_")[-1]) if str(current_speaker).startswith("ch_") else 0,
+            }
         )
 
     transcript_text = _join_transcript_lines(plain_lines)
@@ -458,21 +513,34 @@ def _parse_deepgram_response(data: dict) -> dict:
         "timestamped_transcript": _join_transcript_lines(timed_lines),
         "duration": duration,
         "long_pause_count": long_pause_count,
+        "segments": segments,
+        "channel_metrics": metrics,
     }
 
 
-def _build_deepgram_params(model, keyterms=()):
+def _latin_ratio(text: str) -> float:
+    letters = re.findall(r"[A-Za-zА-Яа-яІіЇїЄєҐґЁё]", text or "")
+    if not letters:
+        return 0.0
+    latin = sum(1 for char in letters if "a" <= char.lower() <= "z")
+    return latin / len(letters)
+
+
+def _build_deepgram_params(model, keyterms=(), language=None):
     model = normalize_deepgram_model(model)
+    fixed = language if language and language != "multi" else None
     base_params = {
         "model": model,
         "smart_format": "true",
         "punctuate": "true",
         "utterances": "true",
         "multichannel": "true",
-        "language": "multi",
-        "detect_language": "true",
-        "language_hints": ["uk", "ru", "en"],
+        "language": fixed or "multi",
     }
+    if not fixed:
+        # Канал клієнта не підштовхуємо в en/pl: multi + підказки uk/ru.
+        base_params["detect_language"] = "true"
+        base_params["language_hints"] = ["uk", "ru"]
     keyterm_params = [("keyterm", term) for term in (keyterms or ())]
     return list(base_params.items()) + keyterm_params
 
@@ -541,9 +609,9 @@ def _download_audio_bytes(url: str) -> tuple[bytes, str]:
     return payload, content_type or "application/octet-stream"
 
 
-def _request_deepgram_bytes(url, keyterms=(), model="nova-3"):
+def _request_deepgram_bytes(url, keyterms=(), model="nova-3", language=None):
     audio, content_type = _download_audio_bytes(url)
-    params = _build_deepgram_params(model, keyterms)
+    params = _build_deepgram_params(model, keyterms, language=language)
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": content_type or "application/octet-stream",
@@ -568,9 +636,9 @@ def _should_retry_with_bytes(error: str) -> bool:
     )
 
 
-def _request_deepgram(*, url, keyterms=(), model="nova-3"):
+def _request_deepgram(*, url, keyterms=(), model="nova-3", language=None):
     model = normalize_deepgram_model(model)
-    params = _build_deepgram_params(model, keyterms)
+    params = _build_deepgram_params(model, keyterms, language=language)
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": "application/json",
@@ -586,10 +654,48 @@ def _request_deepgram(*, url, keyterms=(), model="nova-3"):
     error_text = response.text or str(response.status_code)
     if _should_retry_with_bytes(error_text):
         try:
-            return _request_deepgram_bytes(url, keyterms=keyterms, model=model)
+            return _request_deepgram_bytes(url, keyterms=keyterms, model=model, language=language)
         except Exception:
             pass
     return _deepgram_fail(f"Deepgram error: {error_text}")
+
+
+def _client_channel_confidence(result: dict) -> float:
+    metrics = result.get("channel_metrics") or {}
+    client = metrics.get(1) or {}
+    return float(client.get("confidence") or 0)
+
+
+def _client_channel_needs_ru(result: dict) -> bool:
+    metrics = result.get("channel_metrics") or {}
+    manager = metrics.get(0)
+    client = metrics.get(1)
+    if not manager or not client:
+        return False
+    return float(client.get("latin_ratio") or 0) >= 0.5 and float(manager.get("latin_ratio") or 1) < 0.5
+
+
+def _merge_client_channel(base: dict, retry: dict) -> dict:
+    base_segments = [segment for segment in base.get("segments") or [] if segment.get("channel") != 1]
+    client_segments = [segment for segment in retry.get("segments") or [] if segment.get("channel") == 1]
+    if not client_segments:
+        return base
+    merged = sorted(base_segments + client_segments, key=lambda segment: float(segment.get("start") or 0))
+    plain = [f"{segment['speaker']}: {segment['text']}" for segment in merged]
+    timed = [
+        _format_timed_speaker_line(segment["speaker"], segment["text"], segment.get("start"))
+        for segment in merged
+    ]
+    updated = dict(base)
+    updated["transcript"] = _join_transcript_lines(plain)
+    updated["timestamped_transcript"] = _join_transcript_lines(timed)
+    updated["segments"] = merged
+    metrics = dict(base.get("channel_metrics") or {})
+    retry_client = (retry.get("channel_metrics") or {}).get(1)
+    if retry_client:
+        metrics[1] = retry_client
+    updated["channel_metrics"] = metrics
+    return updated
 
 
 def _transcribe_audio_impl(url, keyterms=(), model="nova-3"):
@@ -597,9 +703,18 @@ def _transcribe_audio_impl(url, keyterms=(), model="nova-3"):
     if not url:
         return _deepgram_fail("empty url")
     try:
-        return _request_deepgram(url=url, keyterms=keyterms, model=model)
+        result = _request_deepgram(url=url, keyterms=keyterms, model=model)
     except Exception as exc:
         return _deepgram_fail(f"Transcription exception: {str(exc)}")
+    if not result.get("ok") or not _client_channel_needs_ru(result):
+        return result
+    try:
+        retry = _request_deepgram(url=url, keyterms=keyterms, model=model, language="ru")
+    except Exception:
+        return result
+    if retry.get("ok") and _client_channel_confidence(retry) > _client_channel_confidence(result):
+        return _merge_client_channel(result, retry)
+    return result
 
 
 class TranscriptionFailed(RuntimeError):
@@ -753,6 +868,7 @@ def clean_transcript_cached(
                         "Не вигадуй і не змінюй таймінги.\n"
                         "4. Не додавай, не прибирай і не перефразовуй репліки — тільки виправляй помилки\n"
                         "5. Поверни тільки виправлений транскрипт без коментарів\n"
+                        "5a. Не підставляй назву іншого проєкту. Якщо назва нерозбірлива — лиши як є з позначкою [низька якість розпізнавання].\n"
                         "6. Якщо одна думка ОДНОГО І ТОГО САМОГО спікера розбита на декілька коротких рядків підряд — склей їх в одну репліку. "
                         "КРИТИЧНО: ніколи не склеюй репліки РІЗНИХ спікерів. "
                         "Менеджер: текст і Клієнт: текст — це завжди окремі рядки навіть якщо вони короткі. "

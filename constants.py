@@ -138,6 +138,13 @@ VIP_BONUS_STATUS_OPTIONS = [
     "Бонус не нараховано",
 ]
 
+# ASR-варіанти назви проєкту. Шукати в перших репліках менеджера.
+PROJECT_ASR_PATTERNS = {
+    "betking": r"betking|bet\s*kings?|бет\s*кінг\w*|беткінг\w*|бєткінг\w*|бетк\w*",
+    "777": r"\b777\b|три\s+сімки|сімки|777\s*ua",
+    "vegas": r"vegas|вегас\w*",
+}
+
 
 def resolve_call_type_key(value: str | None) -> str | None:
     """Normalize label or key → storage key (vip_short_90s / vip_friendly)."""
