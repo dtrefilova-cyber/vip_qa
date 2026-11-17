@@ -32,9 +32,11 @@ from constants import (
 from google_sheets import (
     clean_sheet_cell,
     col_index_to_letter,
+    assert_user_entered_safe,
     comment_contains_slash_ratio,
     comment_is_bare_number,
     prepare_sheet_comment,
+    quote_sheet_name,
     sheets_retry,
 )
 
@@ -916,6 +918,37 @@ def _a1(col: str, row: int) -> str:
     return f"{col}{row}"
 
 
+def journal_write_range(sheet_title: str, start: str, end: str, row: int) -> str:
+    """Один діапазон для Betking, 777 і Vegas. Назва 777 завжди в лапках."""
+    local = _a1(start, row) if start == end else f"{start}{row}:{end}{row}"
+    title = str(sheet_title or "").strip()
+    if not title:
+        return local
+    return f"{quote_sheet_name(title)}!{local}"
+
+
+def _span_letters(start: str, end: str) -> list[str]:
+    from google_sheets import col_index_to_letter
+
+    return [
+        col_index_to_letter(idx)
+        for idx in range(_col_letter_to_index(start), _col_letter_to_index(end) + 1)
+    ]
+
+
+def _reject_unsafe_rectangle(start: str, end: str, values: list) -> None:
+    letters = _span_letters(start, end)
+    forbidden = [letter for letter in letters if letter in _NEVER_WRITE_LETTERS]
+    if forbidden:
+        raise VipJournalError(
+            "Прямокутник запису містить "
+            + ", ".join(forbidden)
+            + ". E/S і J/AB не пишемо."
+        )
+    if any(value == "" or value is None for value in values):
+        raise VipJournalError("Прямокутник запису містить порожнє значення.")
+
+
 def _parse_protected_data_index(exc: BaseException) -> int | None:
     """APIError … Invalid data[N]: protected cell → N."""
     import re
@@ -984,12 +1017,16 @@ def plan_journal_rectangles(
         else:
             mode = "USER_ENTERED"
         if col == comment_letter or (isinstance(value, str) and comment_contains_slash_ratio(value)):
+            if not isinstance(value, str):
+                raise VipJournalError("Коментар QA має бути текстом, не числом.")
             value = prepare_sheet_comment(value)
-            if not value:
+            if not value or comment_is_bare_number(value) or comment_contains_slash_ratio(value):
                 raise VipJournalError(
                     "Коментар QA не може бути лише числом або дробом N/M."
                 )
             payload = {**payload, col: value}
+        if mode == "USER_ENTERED":
+            assert_user_entered_safe(value)
         if (
             spans
             and spans[-1]["mode"] == mode
@@ -1009,10 +1046,7 @@ def plan_journal_rectangles(
             }
         )
     for span in spans:
-        if span["start"] in _NEVER_WRITE_LETTERS or span["end"] in _NEVER_WRITE_LETTERS:
-            raise VipJournalError("Прямокутник запису містить J, AB, E або S.")
-        if any(value == "" or value is None for value in span["values"]):
-            raise VipJournalError("Прямокутник запису містить порожнє значення.")
+        _reject_unsafe_rectangle(span["start"], span["end"], span["values"])
     return spans
 
 
@@ -1036,13 +1070,22 @@ def ensure_total_formula(
     current = str(stored_formula.get(formula_col) or "").lstrip()
     if not current.startswith("="):
         try:
-            sheets_retry(
-                worksheet.batch_update,
-                [{"range": _a1(formula_col, row), "values": [[formula_text]]}],
+            _commit_value_ranges(
+                worksheet,
+                [{
+                    "range": journal_write_range(sheet_title, formula_col, formula_col, row),
+                    "values": [[formula_text]],
+                }],
                 value_input_option="USER_ENTERED",
+                sheet_title=sheet_title,
             )
         except Exception as exc:
-            raise _write_error(sheet_title, _a1(formula_col, row), exc, account) from exc
+            raise _write_error(
+                sheet_title,
+                journal_write_range(sheet_title, formula_col, formula_col, row),
+                exc,
+                account,
+            ) from exc
         stored_formula = _read_cells(worksheet, row, [formula_col], formulas=True)
         current = str(stored_formula.get(formula_col) or "").lstrip()
     if not current.upper().startswith("=SUM"):
@@ -1052,10 +1095,19 @@ def ensure_total_formula(
     return current
 
 
-def _range_ref(start: str, end: str, row: int) -> str:
-    if start == end:
-        return _a1(start, row)
-    return f"{start}{row}:{end}{row}"
+def _range_ref(start: str, end: str, row: int, sheet_title: str = "") -> str:
+    return journal_write_range(sheet_title, start, end, row)
+
+
+def _commit_value_ranges(worksheet, data, *, value_input_option: str, sheet_title: str) -> None:
+    """Пише вже кваліфіковані діапазони. gspread не дописує назву вдруге."""
+    client = getattr(worksheet, "client", None)
+    spreadsheet_id = getattr(worksheet, "spreadsheet_id", None)
+    if client is not None and spreadsheet_id and hasattr(client, "values_batch_update"):
+        body = {"valueInputOption": value_input_option, "data": data}
+        sheets_retry(client.values_batch_update, spreadsheet_id, body=body)
+        return
+    sheets_retry(worksheet.batch_update, data, value_input_option=value_input_option)
 
 
 def _writer_account(google_client) -> str:
@@ -1082,18 +1134,22 @@ def _write_rectangles(
     for span in spans:
         grouped[span["mode"]].append(
             {
-                "range": _range_ref(span["start"], span["end"], row),
+                "range": _range_ref(span["start"], span["end"], row, sheet_title),
                 "values": [span["values"]],
             }
         )
+        if span["mode"] == "USER_ENTERED":
+            for value in span["values"]:
+                assert_user_entered_safe(value)
     for mode, data in grouped.items():
         if not data:
             continue
         try:
-            sheets_retry(
-                worksheet.batch_update,
+            _commit_value_ranges(
+                worksheet,
                 data,
                 value_input_option=mode,
+                sheet_title=sheet_title,
             )
         except Exception as exc:
             refs = ", ".join(item["range"] for item in data)

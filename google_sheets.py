@@ -291,6 +291,18 @@ def prepare_sheet_comment(value) -> str:
     return text
 
 
+def quote_sheet_name(title: str) -> str:
+    """A1-назва аркуша. 777 завжди в лапках: '777'!A1, не 777!A1."""
+    text = str(title or "")
+    return "'" + text.replace("'", "''") + "'"
+
+
+def assert_user_entered_safe(value) -> None:
+    """USER_ENTERED не отримує дріб N/M: Sheets збереже його як число."""
+    if isinstance(value, str) and comment_contains_slash_ratio(value):
+        raise ValueError(f"USER_ENTERED не приймає дріб N/M: {value!r}")
+
+
 def _is_managers_header_row(row: list) -> bool:
     cells = [clean_sheet_cell(c).casefold() for c in (row or [])[:3]]
     if not cells:
@@ -418,6 +430,8 @@ def append_vip_short_result(google_client, spreadsheet_id, row_data, worksheet_n
         result_cell,
     ]
     try:
+        for cell in identity:
+            assert_user_entered_safe(cell)
         sheets_retry(
             worksheet.update,
             range_name=f"A{next_row}:F{next_row}",
@@ -708,10 +722,13 @@ def write_vip_short_manual_tracking(
     )
     range_main = f"{col_letter}1:{col_letter}9"
     try:
+        for cell in column_values:
+            assert_user_entered_safe(cell)
         sheets_retry(
             worksheet.update,
             range_name=range_main,
             values=[[v] for v in column_values],
+            value_input_option="USER_ENTERED",
         )
     except Exception as e:
         return str(e)
@@ -779,10 +796,13 @@ def write_vip_friendly_manual_tracking(
         f"{col_letter}{FRIENDLY_MANUAL_TRACKING_DATA_END_ROW}"
     )
     try:
+        for cell in column_values:
+            assert_user_entered_safe(cell)
         sheets_retry(
             worksheet.update,
             range_name=range_main,
             values=[[v] for v in column_values],
+            value_input_option="USER_ENTERED",
         )
     except Exception as e:
         return str(e)

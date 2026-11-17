@@ -20,6 +20,64 @@ from vip_journal_sheets import (
 )
 
 
+def test_every_project_quotes_the_sheet_and_shares_the_comment_path():
+    """Betking, 777 і Vegas пишуть коментар однаково. 777 в A1 завжди в лапках."""
+    import re
+    from datetime import date
+
+    from vip_journal_sheets import journal_write_range
+
+    ratio = re.compile(r"\d+(?:[.,]\d+)?\s*[/⁄∕／]\s*\d+")
+    scores = {"contact": 5.0, "slip_handling": 0.0, "prep": 10.0, "closing": 2.5}
+    comment = "— Злив: 10/10 (повний текст, не число 10)"
+    payloads = []
+    for project, cell_row in (("Betking", 3), ("777", 3), ("Vegas", 5)):
+        route = resolve_project_route(project)
+        assert route["start_row"] == cell_row
+        ref = journal_write_range(route["title"], "L", "L", route["start_row"])
+        assert ref == f"'{route['title']}'!L{cell_row}"
+        assert not ref.startswith(route["title"] + "!")
+        payload = build_short_row_payload(
+            client_id="4998905" if project == "777" else "1",
+            call_date=date(2026, 11, 5),
+            manager="Мірошник Анастасія",
+            tl="Крисак Іван",
+            scores=scores,
+            check_date=date(2026, 11, 17),
+            qa_comment=comment,
+        )
+        assert payload["G"] == 0.0
+        assert "E" not in payload and "J" not in payload
+        stored = str(payload["L"])
+        assert stored.strip() != "10"
+        assert ratio.search(stored) is None
+        assert "10 із 10" in stored
+        assert "повний текст" in stored
+        payloads.append(stored)
+    assert payloads[0] == payloads[1] == payloads[2]
+    with pytest.raises(VipJournalError, match="N/M|числом"):
+        build_short_row_payload(
+            client_id="1622265",
+            call_date=date(2026, 11, 5),
+            manager="Мірошник Анастасія",
+            tl="Крисак Іван",
+            scores=scores,
+            check_date=date(2026, 11, 17),
+            qa_comment="10",
+        )
+
+
+def test_rectangle_rejects_formula_column_with_an_empty_value():
+    from vip_journal_sheets import _reject_unsafe_rectangle
+
+    with pytest.raises(VipJournalError, match="J"):
+        _reject_unsafe_rectangle("F", "J", [5, 10, 10, 5, ""])
+    with pytest.raises(VipJournalError, match="AB"):
+        _reject_unsafe_rectangle("T", "AB", [5, ""])
+    with pytest.raises(VipJournalError, match="E"):
+        _reject_unsafe_rectangle("A", "E", ["id", "01.11.2026", "М", "TL", ""])
+
+
 def test_project_routing_start_rows():
     assert resolve_project_route("Betking")["start_row"] == 3
     assert resolve_project_route("777")["start_row"] == 3
@@ -533,6 +591,8 @@ def test_short_payload_refuses_missing_slip_column():
 
 
 def _a1_cells(ref: str, row_values: list) -> dict[str, object]:
+    if "!" in ref:
+        ref = ref.split("!")[-1]
     start, _, end = ref.partition(":")
     letters_row = start
     row = "".join(ch for ch in letters_row if ch.isdigit())
@@ -593,8 +653,7 @@ def test_validation_error_quotes_sheet_range_and_account():
             account="writer@example.com",
         )
     message = str(caught.value)
-    assert "777" in message
-    assert "F5:G5" in message
+    assert "'777'!F5:G5" in message
     assert "writer@example.com" in message
     assert "захищен" not in message
     assert "F5" not in protected.cells
