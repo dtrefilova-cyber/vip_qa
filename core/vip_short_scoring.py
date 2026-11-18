@@ -205,15 +205,7 @@ def repair_obvious_closing(facts: dict, dialogue: str) -> dict:
         closing["asked_if_more_questions"] = True
     if _GOODBYE_RE.search(blob):
         closing["said_goodbye"] = True
-    open_contact = re.search(
-        r"звертай|пишіть|пиши|зв'?яз|на зв'?язку|рада була|радий був|бережіть",
-        blob,
-        re.IGNORECASE,
-    )
-    thanked = _THANKS_RE.search(blob) and (open_contact or _GOODBYE_RE.search(blob))
-    farewell_open = re.search(r"бережіть\s+себе", blob, re.IGNORECASE)
-    if thanked or farewell_open:
-        closing["thanked_and_left_contact_open"] = True
+
     def _plain(text: str) -> str:
         return re.sub(r"[’‘ʼ`]", "'", text or "")
 

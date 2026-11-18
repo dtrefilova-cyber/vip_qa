@@ -9,6 +9,7 @@ from core.vip_friendly_scoring import (
     score_call_to_action,
     score_ease,
     score_friendly_development,
+    score_quoted_closing,
     score_vip_friendly,
 )
 from core.vip_scoring_common import (
@@ -138,6 +139,68 @@ def test_closing_missing_names_specific_element():
     result = score_closing(f, SharedCallContext())
     assert result.points == 2.5
     assert any("прощання" in r for r in result.reasons)
+
+
+def _closing(*, thanked: bool, goodbye: bool = True, questions: bool = True, quote_mode: bool = False):
+    return ClosingFacts(
+        asked_if_more_questions=questions,
+        said_goodbye=goodbye,
+        thanked_and_left_contact_open=thanked,
+        quote_mode=quote_mode,
+    )
+
+
+def test_missing_thank_you_does_not_reduce_an_otherwise_good_close():
+    """Подяка і відкритий контакт не ріжуть завершення, якщо решта закриття є."""
+    ctx = SharedCallContext()
+    plain_without = score_closing(_closing(thanked=False), ctx)
+    plain_with = score_closing(_closing(thanked=True), ctx)
+    assert plain_without.points == 5.0
+    assert plain_without.points == plain_with.points
+    assert plain_without.reasons == []
+
+    quoted_without = score_quoted_closing(_closing(thanked=False, quote_mode=True))
+    quoted_with = score_quoted_closing(_closing(thanked=True, quote_mode=True))
+    assert quoted_without.points == 5.0
+    assert quoted_without.points == quoted_with.points
+    assert quoted_without.reasons == []
+
+    goodbye_gap_without = score_closing(_closing(thanked=False, goodbye=False), ctx)
+    goodbye_gap_with = score_closing(_closing(thanked=True, goodbye=False), ctx)
+    assert goodbye_gap_without.points == goodbye_gap_with.points == 2.5
+
+    short_with = score_vip_short_90s(build_perfect_short90s_facts(), ctx)
+    short_facts = build_perfect_short90s_facts()
+    short_facts.closing.thanked_and_left_contact_open = False
+    short_without = score_vip_short_90s(short_facts, ctx)
+    assert short_without.total_score == short_with.total_score == 30.0
+    assert next(item.points for item in short_without.criteria if item.key == "closing") == 5.0
+
+    def friendly(thanked: bool):
+        facts = build_perfect_friendly_facts()
+        facts.closing.thanked_and_left_contact_open = thanked
+        facts.closing.quote_mode = True
+        return score_vip_friendly(facts, ctx)
+
+    friendly_without = friendly(False)
+    friendly_with = friendly(True)
+    assert friendly_without.total_score == friendly_with.total_score == 57.5
+    closing = next(item for item in friendly_without.criteria if item.key == "closing")
+    assert closing.points == 5.0
+    assert not any("подяк" in reason for reason in closing.reasons)
+
+
+def test_closing_guides_do_not_require_thank_you():
+    from guides_content import GUIDE_VIP_FRIENDLY, GUIDE_VIP_SHORT_90S
+
+    phrase = "подякував за час та залишив можливість подальшого контакту"
+    for guide in (GUIDE_VIP_SHORT_90S, GUIDE_VIP_FRIENDLY):
+        item = next(row for row in guide if row["title"] == "Завершення")
+        blob = " ".join(str(item.get(key) or "") for key in ("description", "scale", "notes"))
+        assert phrase not in blob
+    short = next(row for row in GUIDE_VIP_SHORT_90S if row["title"] == "Завершення")
+    assert "уточнив, чи немає у клієнта запитань" in short["description"]
+    assert "попрощався" in short["description"]
 
 
 def test_ai_models_registers_portal_tasks():

@@ -147,6 +147,7 @@ class PrepFacts(BaseModel):
 class ClosingFacts(BaseModel):
     asked_if_more_questions: bool = False
     said_goodbye: bool = False
+    # Старе поле фактів. Не елемент завершення: відсутність бал не знижує.
     thanked_and_left_contact_open: bool = False
     evidence: list[str] = Field(default_factory=list)
     asked_if_more_questions_quote: str = ""
@@ -331,7 +332,6 @@ def score_closing(f: ClosingFacts, ctx: SharedCallContext) -> CriterionScore:
     element_labels = [
         (f.asked_if_more_questions, "питання «чи є ще питання»"),
         (f.said_goodbye, "прощання"),
-        (f.thanked_and_left_contact_open, "подяка з відкритим контактом"),
     ]
     missing_labels = [label for ok, label in element_labels if not ok]
     if not missing_labels:
