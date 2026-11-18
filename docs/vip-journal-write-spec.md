@@ -1,5 +1,7 @@
 # Інструкція: внесення оцінок VIP
 
+Запис робить `vip_journal_sheets.py`: фіксовані колонки `JOURNAL_LAYOUT`, не пошук заголовків. Заголовки лише звіряються перед записом.
+
 Таблиця: https://docs.google.com/spreadsheets/d/1-9M9Z4qcZ-5fikWWm-QGBTvjdjwjXnDZjmG4DIHT7Wk/edit
 Spreadsheet ID: 1-9M9Z4qcZ-5fikWWm-QGBTvjdjwjXnDZjmG4DIHT7Wk
 Перевірено 13.11.2026. Локаль uk_UA, часовий пояс Europe/Kiev.
