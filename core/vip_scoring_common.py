@@ -236,6 +236,11 @@ def _contact_messenger(f: ContactFacts) -> tuple[float, str] | None:
     suffix = _evidence_suffix(f.evidence)
     if f.manager_introduced_self:
         return 5.0, "Месенджер до дзвінка і менеджер назвав себе" + suffix
+    if f.exception_client_recognized_manager:
+        return (
+            5.0,
+            "Месенджер до дзвінка, клієнт звернувся до менеджера на ім'я" + suffix,
+        )
     return 2.5, "Месенджер до дзвінка, але менеджер не назвав своє ім'я" + suffix
 
 
