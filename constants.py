@@ -37,7 +37,7 @@ VIP_MANAGERS_WORKSHEET = "MANAGERS"
 # Журнал оцінок за проєктом (Betking / 777 / Vegas):
 # короткі A:M (E — нова колонка після TL, J — формула),
 # френдлі O:AE (S — нова колонка після TL, AB — формула).
-# Актуальні літери читаються з заголовків аркуша в vip_journal_sheets.
+# Літери журналу зашиті в JOURNAL_LAYOUT (vip_journal_sheets), не шукаються по заголовках.
 VIP_JOURNAL_SHEET_ID = "1-9M9Z4qcZ-5fikWWm-QGBTvjdjwjXnDZjmG4DIHT7Wk"
 VIP_JOURNAL_MANAGERS_WORKSHEET = "Менеджери VIP"
 VIP_JOURNAL_REVIEWER = "АІ"

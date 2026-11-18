@@ -1,8 +1,8 @@
-"""Автозапис результатів VIP-аналізу в журнал за проєктом (Betking / 777 / Vegas).
+"""Запис оцінок VIP у журнал Betking / 777 / Vegas.
 
-Колонки визначаються за заголовками аркуша (а не жорсткими літерами), щоб
-однакова логіка працювала для Betking / 777 / Vegas і short / friendly після
-зсувів (напр. нова колонка справа від TL). Колонку «Бал за дзвінок» ніколи не пишемо.
+Один модуль, фіксовані колонки `JOURNAL_LAYOUT`. Заголовки лише звіряються
+перед записом і не змінюють літери. Успіх лише після повторного читання.
+Наступний рядок після невдалої перевірки не використовується.
 """
 
 from __future__ import annotations
@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import threading
-from datetime import date, datetime
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -24,122 +26,197 @@ from constants import (
     VIP_JOURNAL_CALL_TYPE_FRIENDLY,
     VIP_JOURNAL_CALL_TYPE_SHORT,
     VIP_JOURNAL_MANAGERS_WORKSHEET,
-    VIP_JOURNAL_PROJECTS,
     VIP_JOURNAL_REVIEWER,
     VIP_JOURNAL_SHEET_ID,
     VIP_JOURNAL_TZ,
     resolve_call_type_key,
 )
-from google_sheets import clean_sheet_cell, col_index_to_letter, sheets_retry
+from google_sheets import clean_sheet_cell
 
 logger = logging.getLogger(__name__)
 
-_WRITE_LOCK = threading.Lock()
-_DEDUP_DIR = Path(__file__).resolve().parent / ".cache"
-_DEDUP_PATH = _DEDUP_DIR / "vip_journal_writes.json"
-_HEADER_CACHE: dict[str, dict[str, dict[str, str]]] = {}
+_SHEETS_EPOCH = date(1899, 12, 30)
+_RATIO_RE = re.compile(r"\d\s*[/⁄∕／]\s*\d")
+_BACKOFF_SECONDS = (1, 3, 9)
+_LOCK_TTL = timedelta(seconds=60)
+_READ_ONLY_SHEETS = frozenset({"Гайди", "Менеджери VIP", "Зведення", "Правки"})
+_NEVER_WRITE = frozenset({"E", "J", "N", "S", "AB"})
+_PROCESS_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_PROCESS_GUARD = threading.Lock()
+_DEDUP_PATH = Path(__file__).resolve().parent / ".cache" / "vip_journal_writes.json"
 
-# field → підрядки заголовка (casefold). Більш специфічні — першими.
-# УВАГА: не матчити «менеджер» / «tl» як голий substring — ламає
-# «Робота менеджера зі зливом» і «Статус від TL».
-_HEADER_FIELD_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
-    ("client_id", ("id клієнта", "id клиента", "client id")),
-    ("call_date", ("дата дзвінка", "дата звонка")),
-    ("check_date", ("дата перевірки", "дата проверки")),
-    ("tl_status", ("статус від tl", "статус tl", "статус від тімлід")),
-    ("slip_handling", ("злив", "утримання контакту", "удержание контакта")),
-    ("contact", ("встановлення контакту", "установление контакта")),
-    ("friendly_development", ("розвиток френдлі", "развитие френдли", "френдлі")),
-    ("personal_approach", ("індивідуальний підхід", "индивидуальный подход")),
-    ("call_to_action", ("заклик до гри", "призыв к игре")),
-    ("bonus_offer", ("пропозиція бонусів", "предложение бонусов")),
-    ("prep", ("p.r.e.p", "prep", "заперечення", "заперення", "возражен")),
-    ("closing", ("завершення", "завершение")),
-    ("ease", ("невимушеність", "непринужденность")),
-    ("total_score", ("бал за дзвінок", "балл за звонок")),
-    ("reviewer", ("перевіряючий", "проверяющий")),
-    ("comment", ("коментар qa", "комментарий qa", "коментар", "комментарий")),
-    ("manager", ("піб менеджера", "менеджер vip")),
-    ("tl", ("тімлід", "тимлид")),
-]
 
-_SOFT_FIELD_KEYS = frozenset({"call_date", "check_date", "comment", "reviewer"})
+def _col(letter: str, field: str, header: str, *, write: bool, kind: str, allowed: tuple[float, ...] = (), keyword: str = "") -> dict[str, Any]:
+    return {
+        "letter": letter,
+        "field": field,
+        "header": header,
+        "write": write,
+        "kind": kind,
+        "allowed": allowed,
+        "keyword": keyword,
+    }
 
-# Fallback = реальний журнал Betking/777/Vegas після колонки «Статус від TL»
-# у short і friendly: short A:M (E статус, J формула), friendly O:AE (S статус, AB формула).
-_FALLBACK_SHORT_COLS = {
-    "client_id": "A",
-    "call_date": "B",
-    "manager": "C",
-    "tl": "D",
-    "contact": "F",
-    "slip_handling": "G",
-    "prep": "H",
-    "closing": "I",
-    "total_score": "J",
-    "reviewer": "K",
-    "comment": "L",
-    "check_date": "M",
+
+# Літери зашиті тут. Пошук колонки по тексту заголовка для запису не використовується.
+JOURNAL_LAYOUT: dict[str, Any] = {
+    "spreadsheet_id": VIP_JOURNAL_SHEET_ID,
+    "projects": {
+        "betking": {"title": "Betking", "sheet_id": 445201819, "header_row": 2, "start_row": 3},
+        "777": {"title": "777", "sheet_id": 1229042759, "header_row": 2, "start_row": 3},
+        "vegas": {"title": "Vegas", "sheet_id": 1070088770, "header_row": 4, "start_row": 5},
+    },
+    "blocks": {
+        "short": {
+            "start": "A",
+            "end": "M",
+            "formula": {"letter": "J", "template": "=SUM(F{row}:I{row})"},
+            "ignore_when_free": ("J", "K"),
+            "score_letters": ("F", "G", "H", "I"),
+            "columns": (
+                _col("A", "client_id", "ID клієнта", write=True, kind="text", keyword="клієнта"),
+                _col("B", "call_date", "Дата дзвінка", write=True, kind="date", keyword="дата дзвінка"),
+                _col("C", "manager", "Менеджер VIP", write=True, kind="text", keyword="менеджер"),
+                _col("D", "tl", "TL", write=True, kind="text", keyword="tl"),
+                _col("E", "tl_status", "Статус від TL", write=False, kind="skip", keyword="статус"),
+                _col("F", "contact", "Встановлення контакту", write=True, kind="score", allowed=(0, 2.5, 5), keyword="контакту"),
+                _col("G", "slip_handling", "Робота зі «зливом»", write=True, kind="score", allowed=(0, 2.5, 5, 7.5, 10), keyword="злив"),
+                _col("H", "prep", "P.R.E.P", write=True, kind="score", allowed=(0, 2.5, 5, 7.5, 10), keyword="p.r.e.p"),
+                _col("I", "closing", "Завершення", write=True, kind="score", allowed=(0, 2.5, 5), keyword="завершен"),
+                _col("J", "total", "Бал за дзвінок", write=False, kind="formula", keyword="бал за дзвінок"),
+                _col("K", "reviewer", "Перевіряючий", write=True, kind="text", keyword="перевіря"),
+                _col("L", "comment", "Коментар QA", write=True, kind="text", keyword="коментар"),
+                _col("M", "check_date", "Дата перевірки", write=True, kind="date", keyword="дата перевірки"),
+            ),
+        },
+        "friendly": {
+            "start": "O",
+            "end": "AE",
+            "formula": {"letter": "AB", "template": "=SUM(T{row}:AA{row})"},
+            "ignore_when_free": ("AB", "AC"),
+            "score_letters": ("T", "U", "V", "W", "X", "Y", "Z", "AA"),
+            "columns": (
+                _col("O", "client_id", "ID клієнта", write=True, kind="text", keyword="клієнта"),
+                _col("P", "call_date", "Дата дзвінка", write=True, kind="date", keyword="дата дзвінка"),
+                _col("Q", "manager", "Менеджер VIP", write=True, kind="text", keyword="менеджер"),
+                _col("R", "tl", "TL", write=True, kind="text", keyword="tl"),
+                _col("S", "tl_status", "Статус від TL", write=False, kind="skip", keyword="статус"),
+                _col("T", "contact", "Встановлення контакту", write=True, kind="score", allowed=(0, 2.5, 5), keyword="контакту"),
+                _col("U", "friendly_development", "Розвиток френдлі", write=True, kind="score", allowed=(0, 2.5, 5, 7.5), keyword="френдлі"),
+                _col("V", "personal_approach", "Індивідуальний підхід", write=True, kind="score", allowed=(0, 2.5, 5, 7.5), keyword="підхід"),
+                _col("W", "call_to_action", "Заклик до гри", write=True, kind="score", allowed=(0, 2.5, 5, 10), keyword="заклик"),
+                _col("X", "bonus_offer", "Пропозиція бонусів", write=True, kind="score", allowed=(0, 2.5, 5), keyword="бонус"),
+                _col("Y", "prep", "P.R.E.P", write=True, kind="score", allowed=(0, 2.5, 5, 7.5, 10), keyword="p.r.e.p"),
+                _col("Z", "closing", "Завершення", write=True, kind="score", allowed=(0, 2.5, 5), keyword="завершен"),
+                _col("AA", "ease", "Невимушеність", write=True, kind="score", allowed=(0, 2.5, 5, 7.5), keyword="невимуш"),
+                _col("AB", "total", "Бал за дзвінок", write=False, kind="formula", keyword="бал за дзвінок"),
+                _col("AC", "reviewer", "Перевіряючий", write=True, kind="text", keyword="перевіря"),
+                _col("AD", "comment", "Коментар QA", write=True, kind="text", keyword="коментар"),
+                _col("AE", "check_date", "Дата перевірки", write=True, kind="date", keyword="дата перевірки"),
+            ),
+        },
+    },
 }
-_FALLBACK_FRIENDLY_COLS = {
-    "client_id": "O",
-    "call_date": "P",
-    "manager": "Q",
-    "tl": "R",
-    "contact": "T",
-    "friendly_development": "U",
-    "personal_approach": "V",
-    "call_to_action": "W",
-    "bonus_offer": "X",
-    "prep": "Y",
-    "closing": "Z",
-    "ease": "AA",
-    "total_score": "AB",
-    "reviewer": "AC",
-    "comment": "AD",
-    "check_date": "AE",
-}
-
-# Допустимі бали за ТЗ (роздільник у Sheets — числовий float).
-_ALLOWED_SHORT = {
-    "contact": {0.0, 2.5, 5.0},
-    "slip_handling": {0.0, 2.5, 5.0, 7.5, 10.0},
-    "prep": {0.0, 2.5, 5.0, 7.5, 10.0},
-    "closing": {0.0, 2.5, 5.0},
-}
-_ALLOWED_FRIENDLY = {
-    "contact": {0.0, 2.5, 5.0},
-    "friendly_development": {0.0, 2.5, 5.0, 7.5},
-    "personal_approach": {0.0, 2.5, 5.0, 7.5},
-    # 7.5 для «Заклик до гри» не передбачене
-    "call_to_action": {0.0, 2.5, 5.0, 10.0},
-    "bonus_offer": {0.0, 2.5, 5.0},
-    "prep": {0.0, 2.5, 5.0, 7.5, 10.0},
-    "closing": {0.0, 2.5, 5.0},
-    "ease": {0.0, 2.5, 5.0, 7.5},
-}
-
-_SHORT_KEYS = ("contact", "slip_handling", "prep", "closing")
-_FRIENDLY_KEYS = (
-    "contact",
-    "friendly_development",
-    "personal_approach",
-    "call_to_action",
-    "bonus_offer",
-    "prep",
-    "closing",
-    "ease",
-)
 
 
 class VipJournalError(ValueError):
-    """Помилка валідації / маршрутизації журналу (без запису)."""
+    """Запис не робився або його перевірка не зійшлась."""
+
+
+def quote_sheet_name(title: str) -> str:
+    """A1-назва. 777 завжди в лапках: '777'!A3."""
+    return "'" + str(title or "").replace("'", "''") + "'"
+
+
+def qualified_range(title: str, ref: str) -> str:
+    local = str(ref).split("!")[-1]
+    return f"{quote_sheet_name(title)}!{local}"
+
+
+def column_number(letter: str) -> int:
+    number = 0
+    for char in str(letter or "").upper():
+        number = number * 26 + (ord(char) - 64)
+    return number
+
+
+def column_letter(number: int) -> str:
+    letters = ""
+    value = int(number)
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def date_to_serial(value: date) -> int:
+    """Серійна дата Google Sheets: дні від 30.12.1899."""
+    return (value - _SHEETS_EPOCH).days
+
+
+def serial_to_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _SHEETS_EPOCH + timedelta(days=int(round(float(value))))
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return _SHEETS_EPOCH + timedelta(days=int(round(float(text.replace(",", ".")))))
+    except ValueError:
+        return None
+
+
+def normalize_header(value: Any) -> str:
+    text = clean_sheet_cell(value).casefold().replace("ё", "е")
+    for char in "«»“”„\"'`ʼ":
+        text = text.replace(char, "")
+    text = text.replace(".", "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def header_matches(actual: Any, column: dict[str, Any]) -> bool:
+    """Заголовок збігається з полем колонки. Інша літера через це не обирається."""
+    got = normalize_header(actual)
+    expected = normalize_header(column["header"])
+    if got == expected:
+        return True
+    keyword = normalize_header(column.get("keyword") or "")
+    if not keyword or not got:
+        return False
+    # Короткі позначки («TL») лише цілком: «Статус від TL» не є колонкою TL.
+    if len(keyword) <= 3:
+        return got == keyword
+    return keyword in got
+
+
+def block_layout(call_type: str) -> dict[str, Any]:
+    block = JOURNAL_LAYOUT["blocks"].get(call_type)
+    if not block:
+        raise VipJournalError("Невідомий тип дзвінка. Очікується short або friendly.")
+    return block
+
+
+def project_layout(project: str | None) -> dict[str, Any]:
+    key = normalize_project_key(project)
+    route = JOURNAL_LAYOUT["projects"].get(key or "")
+    if not route:
+        raise VipJournalError(
+            f"Невідомий проєкт для журналу: {project!r}. Очікується betking / 777 / vegas."
+        )
+    return {"key": key, **route}
 
 
 def normalize_project_key(project: str | None) -> str | None:
     text = clean_sheet_cell(project).casefold().replace(" ", "")
-    if not text:
-        return None
     aliases = {
         "betking": "betking",
         "беткінг": "betking",
@@ -151,8 +228,18 @@ def normalize_project_key(project: str | None) -> str | None:
     return aliases.get(text)
 
 
+def resolve_project_route(project: str | None) -> dict:
+    route = project_layout(project)
+    return {
+        "key": route["key"],
+        "title": route["title"],
+        "sheet_id": route["sheet_id"],
+        "start_row": route["start_row"],
+        "header_row": route["header_row"],
+    }
+
+
 def resolve_journal_call_type(value: str | None) -> str | None:
-    """Повертає short|friendly з вибору аналізатора (не з тривалості)."""
     raw = str(value or "").strip().casefold()
     if raw in {VIP_JOURNAL_CALL_TYPE_SHORT, "короткий", "vip_short_90s"}:
         return VIP_JOURNAL_CALL_TYPE_SHORT
@@ -164,31 +251,11 @@ def resolve_journal_call_type(value: str | None) -> str | None:
     if key == CALL_TYPE_KEY_FRIENDLY:
         return VIP_JOURNAL_CALL_TYPE_FRIENDLY
     if value in (CALL_TYPE_SHORT_90S, CALL_TYPE_FRIENDLY):
-        return (
-            VIP_JOURNAL_CALL_TYPE_FRIENDLY
-            if value == CALL_TYPE_FRIENDLY
-            else VIP_JOURNAL_CALL_TYPE_SHORT
-        )
+        return VIP_JOURNAL_CALL_TYPE_FRIENDLY if value == CALL_TYPE_FRIENDLY else VIP_JOURNAL_CALL_TYPE_SHORT
     return None
 
 
-def resolve_project_route(project: str | None) -> dict:
-    key = normalize_project_key(project)
-    if not key or key not in VIP_JOURNAL_PROJECTS:
-        raise VipJournalError(
-            f"Невідомий проєкт для журналу: {project!r}. Очікується betking / 777 / vegas."
-        )
-    route = dict(VIP_JOURNAL_PROJECTS[key])
-    route["key"] = key
-    return route
-
-
 def make_analysis_id(call: dict, call_type: str) -> str:
-    """Стабільний id для дедупу повторної доставки тієї ж картки.
-
-    card_id входить у хеш, щоб два різні дзвінки в одній черзі ніколи не зливались
-    навіть при однаковому client_id/даті/менеджері.
-    """
     payload = "|".join(
         [
             str(call.get("url") or "").strip(),
@@ -203,106 +270,20 @@ def make_analysis_id(call: dict, call_type: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
-def _criterion_points_value(criteria: list, key: str) -> float | None:
-    for item in criteria or []:
-        if not isinstance(item, dict) or item.get("key") != key:
-            continue
-        pts = item.get("points")
-        if pts is None:
-            return None
-        try:
-            return float(pts)
-        except (TypeError, ValueError) as exc:
-            raise VipJournalError(f"Некоректний бал критерію {key}: {pts!r}") from exc
-    return None
-
-
-def _validate_score(key: str, value: float | None, allowed: set[float]) -> float | None:
-    if value is None:
-        return None
-    for candidate in allowed:
-        if abs(value - candidate) < 1e-9:
-            return candidate
-    raise VipJournalError(
-        f"Недопустимий бал {key}={value:g}. Дозволено: {sorted(allowed)}"
-    )
-
-
-def extract_short_scores(verdict_data: dict) -> dict[str, float | None]:
-    criteria = verdict_data.get("criteria") or []
-    out: dict[str, float | None] = {}
-    for key in _SHORT_KEYS:
-        out[key] = _validate_score(key, _criterion_points_value(criteria, key), _ALLOWED_SHORT[key])
-    return out
-
-
-def extract_friendly_scores(verdict_data: dict) -> dict[str, float | None]:
-    criteria = verdict_data.get("criteria") or []
-    out: dict[str, float | None] = {}
-    for key in _FRIENDLY_KEYS:
-        out[key] = _validate_score(
-            key, _criterion_points_value(criteria, key), _ALLOWED_FRIENDLY[key]
-        )
-    return out
-
-
-def _parse_ua_date(value: str | date | datetime | None) -> date | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    raise VipJournalError(f"Некоректна дата: {value!r}")
-
-
-def journal_today() -> date:
-    return datetime.now(ZoneInfo(VIP_JOURNAL_TZ)).date()
-
-
-def _as_sheet_date(value: date | None) -> str:
-    """Дата для USER_ENTERED у форматі, який Sheets парсить у Europe/Kiev."""
-    if value is None:
-        return ""
-    return value.strftime("%d.%m.%Y")
-
-
-def _as_text_id(client_id: str) -> str:
-    """Зберігає початкові нулі (текст у Sheets)."""
-    text = str(client_id or "")
-    if not text:
-        return ""
-    return f"'{text}" if text[:1].isdigit() else text
-
-
-def _score_cell(value: float | None):
-    """Порожній критерій → порожня комірка; 0 лишається 0."""
-    if value is None:
-        return ""
-    return value
-
-
 def parse_journal_managers(values: list[list]) -> list[dict]:
-    """A=проєкт, B=TL, C=менеджер, D=логін."""
+    """A=проєкт, B=TL, C=менеджер, D=логін. Аркуш лише читається."""
     rows = []
     started = False
     for raw in values or []:
-        row = list(raw or [])
-        cells = [clean_sheet_cell(c) for c in row[:4]]
+        cells = [clean_sheet_cell(cell) for cell in list(raw or [])[:4]]
         if not any(cells):
             continue
-        low = [c.casefold() for c in cells]
+        low = [cell.casefold() for cell in cells]
         if not started and (
             "проєкт" in low[0]
             or "проект" in low[0]
             or low[0] in {"project", "a"}
-            or (low[2] in {"менеджер", "manager"} and low[1] in {"tl", "тімлід", "тимлид", ""})
+            or (len(low) > 2 and low[2] in {"менеджер", "manager"})
         ):
             started = True
             continue
@@ -310,21 +291,14 @@ def parse_journal_managers(values: list[list]) -> list[dict]:
         project, tl, manager, login = (cells + ["", "", "", ""])[:4]
         if not manager:
             continue
-        rows.append(
-            {
-                "project": project,
-                "tl": tl,
-                "manager": manager,
-                "login": login,
-            }
-        )
+        rows.append({"project": project, "tl": tl, "manager": manager, "login": login})
     return rows
 
 
 def load_journal_managers(google_client, spreadsheet_id: str | None = None) -> list[dict]:
     sheet_id = spreadsheet_id or VIP_JOURNAL_SHEET_ID
     worksheet = google_client.open_by_key(sheet_id).worksheet(VIP_JOURNAL_MANAGERS_WORKSHEET)
-    values = sheets_retry(worksheet.get_all_values)
+    values = worksheet.get_all_values()
     return parse_journal_managers(values)
 
 
@@ -335,601 +309,878 @@ def resolve_manager_from_directory(
     manager_name: str = "",
     login: str = "",
 ) -> dict:
-    """Один однозначний запис за проєктом + логіном (або ПІБ)."""
-    want_project = project_key.casefold()
+    """Один збіг за проєктом і логіном або точним ім'ям. 0 або більше одного — помилка."""
     pool = []
+    title = JOURNAL_LAYOUT["projects"][project_key]["title"]
     for row in managers or []:
         row_key = normalize_project_key(row.get("project"))
-        if row_key != want_project:
-            # також пряме порівняння назви аркуша / сирого проєкту
-            raw = clean_sheet_cell(row.get("project")).casefold()
-            if raw not in {want_project, VIP_JOURNAL_PROJECTS[project_key]["title"].casefold()}:
-                continue
-        pool.append(row)
-
-    login_norm = clean_sheet_cell(login).casefold()
-    name_norm = clean_sheet_cell(manager_name).casefold()
-    matches = []
+        raw = clean_sheet_cell(row.get("project")).casefold()
+        if row_key == project_key or raw in {project_key, title.casefold()}:
+            pool.append(row)
+    login_norm = clean_sheet_cell(login)
+    name_exact = clean_sheet_cell(manager_name)
+    matches: list[dict] = []
     if login_norm:
-        matches = [r for r in pool if clean_sheet_cell(r.get("login")).casefold() == login_norm]
-    if not matches and name_norm:
-        matches = [r for r in pool if clean_sheet_cell(r.get("manager")).casefold() == name_norm]
-    if not matches:
-        raise VipJournalError(
-            f"Менеджера не знайдено в «{VIP_JOURNAL_MANAGERS_WORKSHEET}» "
-            f"(проєкт={project_key}, login={login!r}, name={manager_name!r})."
-        )
-    if len(matches) > 1:
+        matches = [row for row in pool if clean_sheet_cell(row.get("login")) == login_norm]
+    if not matches and name_exact:
+        matches = [row for row in pool if clean_sheet_cell(row.get("manager")) == name_exact]
+    if len(matches) != 1:
+        if not matches:
+            raise VipJournalError(
+                f"Менеджера не знайдено в «{VIP_JOURNAL_MANAGERS_WORKSHEET}» "
+                f"(проєкт={project_key}, login={login!r}, name={manager_name!r})."
+            )
         raise VipJournalError(
             f"Неоднозначний менеджер у довіднику (проєкт={project_key}, "
             f"login={login!r}, name={manager_name!r}): {len(matches)} збіги."
         )
-    return matches[0]
+    found = matches[0]
+    if not clean_sheet_cell(found.get("tl")):
+        raise VipJournalError(
+            f"У «{VIP_JOURNAL_MANAGERS_WORKSHEET}» немає TL для {found.get('manager')!r}."
+        )
+    return {
+        "project": found.get("project") or "",
+        "tl": clean_sheet_cell(found.get("tl")),
+        "manager": clean_sheet_cell(found.get("manager")),
+        "login": clean_sheet_cell(found.get("login")),
+    }
 
 
-def _cell_filled(value) -> bool:
-    return bool(str(value or "").strip())
-
-
-def find_next_journal_row(
-    col_values: list,
-    *,
-    start_row: int,
-    extra_cols: list[list] | None = None,
-) -> int:
-    """Вільний рядок блоку.
-
-    Рядок зайнятий, якщо заповнений ID клієнта або будь-яка з додаткових
-    ключових колонок блоку (менеджер / бал контакту) — щоб не перезаписати
-    попередній запис, навіть якщо ID ще не встиг «проявитись» у кеші.
-    Формули підсумку та префіл «АІ» сюди не передаємо.
-    """
-    idx = max(start_row, 1) - 1
-    values = list(col_values or [])
-    extras = [list(col or []) for col in (extra_cols or [])]
-    max_len = max([len(values), *(len(col) for col in extras)], default=0)
-    max_len = max(max_len, idx + 1)
-    while idx < max_len:
-        if not _cell_filled(values[idx] if idx < len(values) else ""):
-            occupied_extra = False
-            for col in extras:
-                if idx < len(col) and _cell_filled(col[idx]):
-                    occupied_extra = True
-                    break
-            if not occupied_extra:
-                return idx + 1
-        idx += 1
-    return idx + 1
-
-
-def build_journal_qa_comment(call: dict | None = None, verdict_data: dict | None = None) -> str:
-    """Коментар QA в журналі: розбір результатів аналізу (критерії + конкретні причини)."""
-    _ = call
-    from google_sheets import format_vip_score_comment_for_sheet
-
-    return str(format_vip_score_comment_for_sheet(verdict_data or {}) or "").strip()
-
-
-def _norm_header(value: str) -> str:
-    return clean_sheet_cell(value).casefold().replace("ё", "е")
-
-
-def _match_header_field(header: str) -> str | None:
-    text = _norm_header(header)
-    if not text:
+def _parse_ua_date(value: str | date | datetime | None) -> date | None:
+    if value is None or value == "":
         return None
-    # Точні короткі заголовки (інакше «Статус від TL» / «менеджер» у чужих фразах).
-    if text == "tl":
-        return "tl"
-    if text in {"менеджер", "manager"}:
-        return "manager"
-    for field, patterns in _HEADER_FIELD_PATTERNS:
-        for pattern in patterns:
-            if pattern in text:
-                return field
-    return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    parsed = serial_to_date(value)
+    if parsed is None:
+        raise VipJournalError(f"Некоректна дата: {value!r}")
+    return parsed
 
 
-_FRIENDLY_ONLY_FIELDS = frozenset(
-    {
-        "friendly_development",
-        "personal_approach",
-        "call_to_action",
-        "bonus_offer",
-        "ease",
-    }
-)
-_SHORT_ONLY_FIELDS = frozenset({"slip_handling"})
+def journal_today() -> date:
+    return datetime.now(ZoneInfo(VIP_JOURNAL_TZ)).date()
 
 
-def discover_journal_columns(header_rows: list[list]) -> dict[str, dict[str, str]]:
-    """Знаходить колонки short/friendly за заголовками.
+def _canonical_score(field: str, value: Any, allowed: tuple[float, ...]) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise VipJournalError(f"Недопустимий бал {field}={value!r}.") from exc
+    for candidate in allowed:
+        if abs(number - candidate) < 1e-9:
+            return float(candidate)
+    allowed_text = ", ".join(str(item).replace(".", ",") for item in allowed)
+    raise VipJournalError(f"Недопустимий бал {field}={number:g}. Дозволено: {allowed_text}.")
 
-    Повертає {"short": {field: "A", ...}, "friendly": {...}}.
-    Колонка total_score (формула) потрапляє в мапу лише щоб її свідомо пропускати.
-    """
-    width = max((len(row) for row in header_rows or []), default=0)
-    merged: list[str] = []
-    for idx in range(width):
-        parts = []
-        for row in header_rows or []:
-            if idx < len(row):
-                cell = clean_sheet_cell(row[idx])
-                if cell:
-                    parts.append(cell)
-        merged.append(" / ".join(parts))
 
-    hits: list[tuple[int, str]] = []
-    for idx, header in enumerate(merged, start=1):
-        field = _match_header_field(header)
-        if field:
-            hits.append((idx, field))
-
-    # Межа блоків — перед другим «ID клієнта» (не середнє арифметичне).
-    client_idxs = [idx for idx, field in hits if field == "client_id"]
-    if len(client_idxs) >= 2:
-        split = client_idxs[1] - 0.5
-    else:
-        total_idxs = [idx for idx, field in hits if field == "total_score"]
-        split = (total_idxs[0] + 0.5) if total_idxs else 13.5
-
-    short: dict[str, str] = {}
-    friendly: dict[str, str] = {}
-    for idx, field in hits:
-        letter = col_index_to_letter(idx)
-        if field in _FRIENDLY_ONLY_FIELDS:
-            friendly[field] = letter
+def validate_scores(call_type: str, scores: dict[str, Any] | None) -> dict[str, float | None]:
+    block = block_layout(call_type)
+    incoming = dict(scores or {})
+    checked: dict[str, float | None] = {}
+    for column in block["columns"]:
+        if column["kind"] != "score":
             continue
-        if field in _SHORT_ONLY_FIELDS:
-            short[field] = letter
+        checked[column["field"]] = _canonical_score(
+            column["field"], incoming.get(column["field"]), column["allowed"]
+        )
+    return checked
+
+
+def format_points(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return f"{value:.1f}".replace(".", ",")
+
+
+def build_comment_from_scores(
+    call_type: str,
+    scores: dict[str, float | None],
+    reasons: dict[str, str] | None = None,
+) -> str:
+    """Той самий словник балів, що йде в клітинки. None — «не оцінено», не «0 із N»."""
+    lines = []
+    notes = reasons or {}
+    for column in block_layout(call_type)["columns"]:
+        if column["kind"] != "score":
             continue
-        if idx <= split:
-            short.setdefault(field, letter)
-        else:
-            friendly.setdefault(field, letter)
-
-    # Повний fallback лише коли блок майже не розпізнався — інакше зсув літер гірший за відсутнє поле.
-    if not all(k in short for k in ("client_id", "manager", "contact")):
-        logger.warning("VIP journal short headers incomplete; using fallback letters")
-        short = dict(_FALLBACK_SHORT_COLS)
-    if not all(k in friendly for k in ("client_id", "manager", "contact", "ease")):
-        logger.warning("VIP journal friendly headers incomplete; using fallback letters")
-        friendly = dict(_FALLBACK_FRIENDLY_COLS)
-
-    # У skip тільки реальні колонки формули з заголовка (не здогадки I/J/Z/AA/AB —
-    # інакше банимо «Завершення» на I після insert).
-    skip = {
-        letter
-        for letter in (short.get("total_score"), friendly.get("total_score"))
-        if letter
-    }
-    # Додатково: будь-яка літера з hits, де field == total_score (на випадок дублікатів).
-    for idx, field in hits:
-        if field == "total_score":
-            skip.add(col_index_to_letter(idx))
-    return {"short": short, "friendly": friendly, "skip": skip}
+        label = column["header"]
+        value = scores.get(column["field"])
+        if value is None:
+            lines.append(f"— {label}: не оцінено")
+            continue
+        maximum = max(column["allowed"])
+        line = f"— {label}: {format_points(value)} із {format_points(maximum)}"
+        reason = clean_sheet_cell(notes.get(column["field"]))
+        if reason:
+            line += f" ({reason})"
+        lines.append(line)
+    text = "\n".join(lines).strip()
+    if _RATIO_RE.search(text):
+        raise VipJournalError("Коментар містить дріб N/M. Запис не робимо.")
+    return text
 
 
-def load_journal_column_map(worksheet) -> dict[str, dict[str, str]]:
-    """Читає заголовки (рядки 1–5) щоразу — без кешу, щоб зсув колонок одразу підхоплювався."""
-    rows = []
-    for row_no in range(1, 6):
-        try:
-            rows.append(sheets_retry(worksheet.row_values, row_no))
-        except Exception:
-            rows.append([])
-    # Fallback: широкий get, якщо row_values порожні (merged headers).
-    if not any(any(clean_sheet_cell(c) for c in row) for row in rows):
-        try:
-            block = sheets_retry(worksheet.get, "A1:AZ5")
-            rows = list(block or [])
-        except Exception:
-            logger.exception("VIP journal header get(A1:AZ5) failed")
-    mapping = discover_journal_columns(rows)
-    logger.info(
-        "VIP journal columns worksheet=%s skip=%s short=%s friendly=%s",
-        getattr(worksheet, "id", id(worksheet)),
-        mapping.get("skip"),
-        mapping.get("short"),
-        mapping.get("friendly"),
+def comment_has_ratio(value: Any) -> bool:
+    return bool(_RATIO_RE.search(str(value if value is not None else "")))
+
+
+def _cell_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _same_number(left: Any, right: float) -> bool:
+    if isinstance(left, bool) or left is None or isinstance(left, str):
+        return False
+    try:
+        return abs(float(left) - float(right)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _id_text(value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if text.startswith("'"):
+        text = text[1:]
+    if isinstance(value, float) and abs(value - round(value)) < 1e-9:
+        text = str(int(round(value)))
+    return text.strip()
+
+
+def _row_map(values: list, start_letter: str) -> dict[str, Any]:
+    start = column_number(start_letter)
+    mapped: dict[str, Any] = {}
+    for offset, value in enumerate(values or []):
+        mapped[column_letter(start + offset)] = value
+    return mapped
+
+
+def _writer_account(google_client) -> str:
+    holders = [google_client, getattr(google_client, "http", None), getattr(google_client, "auth", None)]
+    for holder in holders:
+        creds = getattr(holder, "credentials", None) if holder is not None else None
+        email = getattr(creds, "service_account_email", None) or getattr(creds, "signer_email", None)
+        if email:
+            return str(email)
+    return "невідомий обліковий запис"
+
+
+def _public_error(exc: BaseException) -> str:
+    text = str(exc)
+    text = re.sub(r"ya29\.[A-Za-z0-9_\-]+", "[token]", text)
+    text = re.sub(r"Bearer\s+\S+", "Bearer [token]", text, flags=re.IGNORECASE)
+    text = re.sub(r"private_key['\"]?\s*[:=].*", "private_key [hidden]", text)
+    return text
+
+
+def _retryable(exc: BaseException) -> bool:
+    if isinstance(exc, VipJournalError):
+        return False
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    if code in {429, 500, 502, 503, 504}:
+        return True
+    text = str(exc).lower()
+    return any(token in text for token in ("429", "500", "502", "503", "504", "timeout", "unavailable"))
+
+
+def _values_batch(book, ranges: list[str], render: str) -> list[list[list]]:
+    response = book.values_batch_get(
+        ranges,
+        params={"valueRenderOption": render, "majorDimension": "ROWS"},
     )
-    return mapping
+    blocks = response.get("valueRanges", response) if isinstance(response, dict) else response
+    rows = []
+    for block in blocks or []:
+        if isinstance(block, dict):
+            rows.append(block.get("values") or [])
+        else:
+            rows.append(block or [])
+    return rows
 
-def build_short_field_values(
+
+def _open_book(google_client):
+    return google_client.open_by_key(VIP_JOURNAL_SHEET_ID)
+
+
+def _worksheet(book, route: dict):
+    worksheet = book.get_worksheet_by_id(int(route["sheet_id"]))
+    title = str(getattr(worksheet, "title", "") or route["title"])
+    if title in _READ_ONLY_SHEETS:
+        raise VipJournalError(f"Аркуш {title} не записується.")
+    return worksheet
+
+
+def _read_headers_and_block(book, route: dict, call_type: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    block = block_layout(call_type)
+    title = route["title"]
+    header_ref = qualified_range(title, f"A{route['header_row']}:AE{route['header_row']}")
+    data_ref = qualified_range(
+        title,
+        f"{block['start']}{route['start_row']}:{block['end']}{int(route['row_count'])}",
+    )
+    header_rows, data_rows = _values_batch(book, [header_ref, data_ref], "UNFORMATTED_VALUE")
+    headers = _row_map(header_rows[0] if header_rows else [], "A")
+    mapped = [_row_map(row, block["start"]) for row in data_rows]
+    return headers, mapped
+
+
+def _check_headers(headers: dict[str, Any], call_type: str) -> None:
+    for column in block_layout(call_type)["columns"]:
+        actual = headers.get(column["letter"], "")
+        if header_matches(actual, column):
+            continue
+        shown = clean_sheet_cell(actual) or "порожньо"
+        raise VipJournalError(
+            "Структура аркуша змінилась: "
+            f"очікувалось {column['header']} у колонці {column['letter']}, а там {shown}."
+        )
+
+
+def _desired_cells(
+    call_type: str,
     *,
     client_id: str,
-    call_date: date | None,
+    call_date: date,
     manager: str,
     tl: str,
     scores: dict[str, float | None],
-    check_date: date | None,
-    reviewer: str = VIP_JOURNAL_REVIEWER,
-    qa_comment: str = "",
-) -> dict[str, Any]:
-    fields = {
-        "client_id": _as_text_id(client_id),
-        "call_date": _as_sheet_date(call_date),
-        "manager": manager,
-        "tl": tl,
-        "contact": _score_cell(scores.get("contact")),
-        "slip_handling": _score_cell(scores.get("slip_handling")),
-        "prep": _score_cell(scores.get("prep")),
-        "closing": _score_cell(scores.get("closing")),
-        "reviewer": reviewer,
-        "check_date": _as_sheet_date(check_date),
+    check_date: date,
+    comment: str,
+) -> dict[str, dict[str, Any]]:
+    """Клітинки до запису. None-бал у словник не входить і нулем не замінюється."""
+    cells: dict[str, dict[str, Any]] = {}
+    for column in block_layout(call_type)["columns"]:
+        if not column["write"] or column["letter"] in _NEVER_WRITE:
+            continue
+        kind = column["kind"]
+        if kind == "score":
+            value = scores.get(column["field"])
+            if value is None:
+                continue
+            cells[column["letter"]] = {"kind": "number", "value": float(value), "field": column["field"]}
+        elif column["field"] == "client_id":
+            cells[column["letter"]] = {"kind": "string", "value": client_id, "field": "client_id"}
+        elif column["field"] == "call_date":
+            cells[column["letter"]] = {"kind": "date", "value": date_to_serial(call_date), "field": "call_date"}
+        elif column["field"] == "check_date":
+            cells[column["letter"]] = {"kind": "date", "value": date_to_serial(check_date), "field": "check_date"}
+        elif column["field"] == "manager":
+            cells[column["letter"]] = {"kind": "string", "value": manager, "field": "manager"}
+        elif column["field"] == "tl":
+            cells[column["letter"]] = {"kind": "string", "value": tl, "field": "tl"}
+        elif column["field"] == "reviewer":
+            cells[column["letter"]] = {"kind": "string", "value": VIP_JOURNAL_REVIEWER, "field": "reviewer"}
+        elif column["field"] == "comment":
+            cells[column["letter"]] = {"kind": "string", "value": comment, "field": "comment"}
+    return cells
+
+
+def _entered_value(cell: dict[str, Any]) -> dict[str, Any]:
+    if cell["kind"] == "string":
+        return {"stringValue": str(cell["value"])}
+    return {"numberValue": float(cell["value"])}
+
+
+def build_update_requests(sheet_id: int, row: int, cells: dict[str, dict[str, Any]]) -> list[dict]:
+    letters = sorted(cells, key=column_number)
+    for letter in letters:
+        if letter in _NEVER_WRITE:
+            raise VipJournalError(f"Прямокутник запису містить {letter}.")
+        if cells[letter]["value"] is None or cells[letter]["value"] == "":
+            raise VipJournalError("Прямокутник запису містить порожнє значення.")
+    groups: list[list[str]] = []
+    for letter in letters:
+        if groups and column_number(letter) == column_number(groups[-1][-1]) + 1:
+            groups[-1].append(letter)
+        else:
+            groups.append([letter])
+    requests = []
+    for group in groups:
+        start = column_number(group[0]) - 1
+        end = start + len(group)
+        if any(column_letter(index + 1) in _NEVER_WRITE for index in range(start, end)):
+            raise VipJournalError("Прямокутник запису зачіпає E, J, N, S або AB.")
+        requests.append(
+            {
+                "updateCells": {
+                    "range": {
+                        "sheetId": int(sheet_id),
+                        "startRowIndex": row - 1,
+                        "endRowIndex": row,
+                        "startColumnIndex": start,
+                        "endColumnIndex": end,
+                    },
+                    "rows": [{"values": [{"userEnteredValue": _entered_value(cells[letter])} for letter in group]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+        )
+    return requests
+
+
+def _formula_request(sheet_id: int, call_type: str, row: int) -> dict:
+    formula = block_layout(call_type)["formula"]
+    letter = formula["letter"]
+    index = column_number(letter) - 1
+    return {
+        "updateCells": {
+            "range": {
+                "sheetId": int(sheet_id),
+                "startRowIndex": row - 1,
+                "endRowIndex": row,
+                "startColumnIndex": index,
+                "endColumnIndex": index + 1,
+            },
+            "rows": [{"values": [{"userEnteredValue": {"formulaValue": formula["template"].format(row=row)}}]}],
+            "fields": "userEnteredValue",
+        }
     }
-    comment = str(qa_comment or "").strip()
-    if comment:
-        fields["comment"] = comment
-    return fields
 
 
-def build_friendly_field_values(
-    *,
-    client_id: str,
-    call_date: date | None,
-    manager: str,
-    tl: str,
-    scores: dict[str, float | None],
-    check_date: date | None,
-    reviewer: str = VIP_JOURNAL_REVIEWER,
-    qa_comment: str = "",
-) -> dict[str, Any]:
-    fields = {
-        "client_id": _as_text_id(client_id),
-        "call_date": _as_sheet_date(call_date),
-        "manager": manager,
-        "tl": tl,
-        "contact": _score_cell(scores.get("contact")),
-        "friendly_development": _score_cell(scores.get("friendly_development")),
-        "personal_approach": _score_cell(scores.get("personal_approach")),
-        "call_to_action": _score_cell(scores.get("call_to_action")),
-        "bonus_offer": _score_cell(scores.get("bonus_offer")),
-        "prep": _score_cell(scores.get("prep")),
-        "closing": _score_cell(scores.get("closing")),
-        "ease": _score_cell(scores.get("ease")),
-        "reviewer": reviewer,
-        "check_date": _as_sheet_date(check_date),
+def _occupied(row: dict[str, Any], call_type: str) -> bool:
+    ignored = set(block_layout(call_type)["ignore_when_free"])
+    for column in block_layout(call_type)["columns"]:
+        if column["letter"] in ignored or column["letter"] in _NEVER_WRITE:
+            continue
+        if column["kind"] == "skip":
+            continue
+        if not _cell_empty(row.get(column["letter"])):
+            return True
+    return False
+
+
+def _key_matches(row: dict[str, Any], call_type: str, client_id: str, call_date: date, manager: str) -> bool:
+    columns = {column["field"]: column["letter"] for column in block_layout(call_type)["columns"]}
+    if _id_text(row.get(columns["client_id"])) != client_id:
+        return False
+    if serial_to_date(row.get(columns["call_date"])) != call_date:
+        return False
+    return clean_sheet_cell(row.get(columns["manager"])) == manager
+
+
+def _find_rows(block_rows: list[dict[str, Any]], route: dict, call_type: str, client_id: str, call_date: date, manager: str) -> list[int]:
+    found = []
+    for offset, row in enumerate(block_rows):
+        number = route["start_row"] + offset
+        if number > route["row_count"]:
+            break
+        if _key_matches(row, call_type, client_id, call_date, manager):
+            found.append(number)
+    return found
+
+
+def _free_row(block_rows: list[dict[str, Any]], route: dict, call_type: str) -> int:
+    last = int(route["row_count"])
+    for number in range(int(route["start_row"]), last + 1):
+        offset = number - int(route["start_row"])
+        row = block_rows[offset] if offset < len(block_rows) else {}
+        if not _occupied(row, call_type):
+            return number
+    raise VipJournalError("Журнал заповнений, треба розширити сітку.")
+
+
+def _values_equal(cell: dict[str, Any], actual: Any) -> bool:
+    if cell["kind"] == "string":
+        return _id_text(actual) == str(cell["value"]) if cell["field"] == "client_id" else clean_sheet_cell(actual) == str(cell["value"])
+    if cell["kind"] == "date":
+        return serial_to_date(actual) == serial_to_date(cell["value"])
+    return _same_number(actual, float(cell["value"]))
+
+
+def _score_conflict(call_type: str, letter: str) -> bool:
+    return letter in set(block_layout(call_type)["score_letters"])
+
+
+def _plan_existing(row: dict[str, Any], call_type: str, desired: dict[str, dict[str, Any]], row_number: int) -> tuple[str, dict[str, dict[str, Any]], str]:
+    conflicts = []
+    pending: dict[str, dict[str, Any]] = {}
+    for letter, cell in desired.items():
+        actual = row.get(letter)
+        if _cell_empty(actual):
+            pending[letter] = cell
+            continue
+        if _values_equal(cell, actual):
+            continue
+        if _score_conflict(call_type, letter):
+            conflicts.append((letter, actual, cell["value"]))
+        # Заповнену не-балову клітинку не перезаписуємо: це може бути ручна правка.
+    if conflicts:
+        letter, actual, wanted = conflicts[0]
+        return (
+            "conflict",
+            {},
+            f"Конфлікт: у рядку {row_number} вже стоїть {actual}, аналіз дав {wanted}.",
+        )
+    if not pending:
+        return "same", {}, ""
+    return "fill", pending, ""
+
+
+def _missing_score_names(call_type: str, scores: dict[str, float | None]) -> list[str]:
+    names = []
+    for column in block_layout(call_type)["columns"]:
+        if column["kind"] == "score" and scores.get(column["field"]) is None:
+            names.append(column["header"])
+    return names
+
+
+def _status_text(kind: str, route: dict, row: int, missing: list[str], detail: str = "") -> str:
+    if kind == "created":
+        base = f"Записано · {route['title']} · рядок {row}"
+    elif kind == "filled":
+        base = f"Дописано · рядок {row}"
+    elif kind == "same":
+        return f"Вже записано · рядок {row}"
+    elif kind == "conflict":
+        return f"Конфлікт · рядок {row}"
+    elif kind == "ambiguous":
+        return detail
+    elif kind == "divergent":
+        return "Два аналізи розходяться"
+    else:
+        base = f"Помилка перевірки · рядок {row}"
+    if missing and kind in {"created", "filled"}:
+        return f"Неповні бали · рядок {row}: {', '.join(missing)}"
+    return base
+
+
+def _read_written_row(book, route: dict, call_type: str, row: int) -> tuple[dict[str, Any], str]:
+    block = block_layout(call_type)
+    title = route["title"]
+    row_ref = qualified_range(title, f"{block['start']}{row}:{block['end']}{row}")
+    formula_letter = block["formula"]["letter"]
+    formula_ref = qualified_range(title, f"{formula_letter}{row}")
+    data_rows = _values_batch(book, [row_ref], "UNFORMATTED_VALUE")
+    formula_rows = _values_batch(book, [formula_ref], "FORMULA")
+    matrix = data_rows[0] if data_rows else []
+    mapped = _row_map(matrix[0] if matrix else [], block["start"])
+    formula = ""
+    formula_matrix = formula_rows[0] if formula_rows else []
+    if formula_matrix and formula_matrix[0]:
+        formula = str(formula_matrix[0][0] or "")
+    return mapped, formula
+
+
+def _verify(actual: dict[str, Any], formula: str, call_type: str, desired: dict[str, dict[str, Any]], row: int) -> list[str]:
+    problems = []
+    for letter, cell in desired.items():
+        got = actual.get(letter)
+        if cell["field"] == "comment":
+            if isinstance(got, (int, float)) and not isinstance(got, bool):
+                problems.append(f"{letter}{row}: очікувалось {cell['value']!r} / є число {got}")
+                continue
+            if comment_has_ratio(got):
+                problems.append(f"{letter}{row}: очікувалось текст без N/M / є {got!r}")
+                continue
+        if not _values_equal(cell, got):
+            problems.append(f"{letter}{row}: очікувалось {cell['value']!r} / є {got!r}")
+    expected = block_layout(call_type)["formula"]["template"].format(row=row)
+    if formula.replace(" ", "").upper() != expected.replace(" ", "").upper():
+        problems.append(f"{block_layout(call_type)['formula']['letter']}{row}: очікувалось {expected} / є {formula or 'порожньо'}")
+    return problems
+
+
+def _commit(book, requests: list[dict]) -> None:
+    if not requests:
+        return
+    for request in requests:
+        fields = request.get("updateCells", {}).get("fields")
+        if fields != "userEnteredValue":
+            raise VipJournalError("Запис дозволяє лише fields=userEnteredValue.")
+    book.batch_update({"requests": requests})
+
+
+def _ensure_formula(book, route: dict, call_type: str, row: int, formula: str, *, dry_run: bool) -> str:
+    expected = block_layout(call_type)["formula"]["template"].format(row=row)
+    if formula.replace(" ", "").upper() == expected.replace(" ", "").upper():
+        return formula
+    request = _formula_request(route["sheet_id"], call_type, row)
+    if dry_run:
+        return expected
+    _commit(book, [request])
+    _, stored = _read_written_row(book, route, call_type, row)
+    return stored
+
+
+def _process_lock(sheet_id: int, call_type: str):
+    key = (str(sheet_id), call_type)
+    with _PROCESS_GUARD:
+        return _PROCESS_LOCKS.setdefault(key, threading.Lock())
+
+
+def _remote_lock(supabase, sheet_id: int, call_type: str, owner: str) -> None:
+    if supabase is None:
+        return
+    key = f"{sheet_id}:{call_type}"
+    now = datetime.now(ZoneInfo(VIP_JOURNAL_TZ))
+    try:
+        existing = supabase.table("vip_journal_locks").select("owner,expires_at").eq("lock_key", key).limit(1).execute()
+        rows = getattr(existing, "data", None) or []
+        if rows:
+            expires = rows[0].get("expires_at") or ""
+            try:
+                expires_at = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+            except ValueError:
+                expires_at = now
+            if expires_at > now and rows[0].get("owner") != owner:
+                raise VipJournalError("Журнал зайнятий іншим записом. Повторіть за хвилину.")
+        supabase.table("vip_journal_locks").upsert(
+            {
+                "lock_key": key,
+                "owner": owner,
+                "expires_at": (now + _LOCK_TTL).isoformat(),
+            }
+        ).execute()
+    except VipJournalError:
+        raise
+    except Exception:
+        logger.warning("Журнальний лок Supabase недоступний", exc_info=True)
+
+
+def _release_remote_lock(supabase, sheet_id: int, call_type: str, owner: str) -> None:
+    if supabase is None:
+        return
+    try:
+        supabase.table("vip_journal_locks").delete().eq("lock_key", f"{sheet_id}:{call_type}").eq("owner", owner).execute()
+    except Exception:
+        logger.debug("Не вдалося зняти лок журналу", exc_info=True)
+
+
+def _remember(record: dict, supabase=None) -> None:
+    try:
+        _DEDUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        store = {}
+        if _DEDUP_PATH.exists():
+            store = json.loads(_DEDUP_PATH.read_text(encoding="utf-8") or "{}")
+        store[str(record.get("analysis_id") or record.get("call_key"))] = record
+        _DEDUP_PATH.write_text(json.dumps(store, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        logger.debug("Локальний журнал запису не збережено", exc_info=True)
+    if supabase is None:
+        return
+    try:
+        supabase.table("vip_journal_writes").upsert(record).execute()
+    except Exception:
+        logger.warning("Запис результату в Supabase не вдався", exc_info=True)
+
+
+def _load_prior_scores(supabase, *, project: str, call_type: str, client_id: str, call_date: date, manager: str) -> list[dict]:
+    if supabase is None:
+        return []
+    try:
+        response = (
+            supabase.table("vip_short_call_logs")
+            .select("client_id,call_date,ret_manager,project,call_type,criteria_scores,verdict")
+            .eq("client_id", client_id)
+            .limit(30)
+            .execute()
+        )
+    except Exception:
+        logger.warning("Перевірка інших аналізів у Supabase не вдалась", exc_info=True)
+        return []
+    found = []
+    for row in getattr(response, "data", None) or []:
+        row_type = resolve_journal_call_type(row.get("call_type"))
+        row_project = normalize_project_key(row.get("project"))
+        row_date = _parse_ua_date(row.get("call_date"))
+        row_manager = clean_sheet_cell(row.get("ret_manager"))
+        if row_type != call_type or row_project != project or row_date != call_date or row_manager != manager:
+            continue
+        if str(row.get("verdict") or "scored") in {"failed", "error"}:
+            continue
+        found.append(row)
+    return found
+
+
+def _scores_from_criteria(call_type: str, criteria: list) -> dict[str, float | None]:
+    by_key = {}
+    for item in criteria or []:
+        if isinstance(item, dict) and item.get("key"):
+            by_key[str(item["key"])] = item.get("points")
+    raw = {column["field"]: by_key.get(column["field"]) for column in block_layout(call_type)["columns"] if column["kind"] == "score"}
+    return validate_scores(call_type, raw)
+
+
+def _scores_conflict(left: dict[str, float | None], right: dict[str, float | None]) -> bool:
+    keys = set(left) | set(right)
+    for key in keys:
+        if left.get(key) != right.get(key):
+            return True
+    return False
+
+
+def _result(ok: bool, status: str, *, route: dict | None = None, row: int | None = None, error: str = "", extra: dict | None = None) -> dict:
+    payload = {
+        "ok": ok,
+        "status": status,
+        "error": error,
+        "row": row,
+        "sheet_title": (route or {}).get("title", ""),
+        "sheet_id": (route or {}).get("sheet_id"),
+        "call_type": (route or {}).get("call_type", ""),
     }
-    comment = str(qa_comment or "").strip()
-    if comment:
-        fields["comment"] = comment
-    return fields
-
-
-def fields_to_letter_payload(
-    fields: dict[str, Any],
-    colmap: dict[str, str],
-    *,
-    skip_letters: set[str] | frozenset[str] | None = None,
-) -> dict[str, Any]:
-    """field→value + field→letter → letter→value. Формулу total_score ніколи не пишемо."""
-    payload: dict[str, Any] = {}
-    banned = set(skip_letters or ())
-    formula_letter = colmap.get("total_score")
-    if formula_letter:
-        banned.add(formula_letter)
-
-    for field, value in fields.items():
-        if field == "total_score":
-            continue
-        letter = colmap.get(field)
-        if not letter:
-            # Не валимо весь рядок через одну відсутню колонку — пишемо решту.
-            logger.warning("VIP journal missing column for field %s — skip field", field)
-            continue
-        if letter in banned:
-            logger.warning(
-                "VIP journal skip banned/formula column %s for field %s",
-                letter,
-                field,
-            )
-            continue
-        if value == "" or value is None:
-            continue
-        payload[letter] = value
-    for letter in banned:
-        payload.pop(letter, None)
+    if extra:
+        payload.update(extra)
     return payload
 
 
-def build_short_row_payload(
+def write_journal_call(
+    google_client,
     *,
+    project: str,
+    call_type: str,
     client_id: str,
-    call_date: date | None,
+    call_date: date | str,
     manager: str,
-    tl: str,
-    scores: dict[str, float | None],
-    check_date: date | None,
-    reviewer: str = VIP_JOURNAL_REVIEWER,
-    qa_comment: str = "",
-    colmap: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    fields = build_short_field_values(
-        client_id=client_id,
-        call_date=call_date,
-        manager=manager,
-        tl=tl,
-        scores=scores,
-        check_date=check_date,
-        reviewer=reviewer,
-        qa_comment=qa_comment,
+    scores: dict[str, Any] | None,
+    check_date: date | str | None = None,
+    reasons: dict[str, str] | None = None,
+    managers: list[dict] | None = None,
+    login: str = "",
+    dry_run: bool = False,
+    supabase=None,
+    prior_analyses: list[dict] | None = None,
+    analysis_id: str = "",
+    sleeper=None,
+) -> dict:
+    """Алгоритм розділів 2–3. Повертає статус і нічого не пише в режимі dry_run."""
+    sleep = sleeper or time.sleep
+    if supabase is False:
+        supabase = None
+    route = project_layout(project)
+    route["call_type"] = call_type
+    client = str(client_id or "").strip()
+    if not client:
+        raise VipJournalError("Обов'язкове поле client_id порожнє.")
+    parsed_call = _parse_ua_date(call_date)
+    if parsed_call is None:
+        raise VipJournalError("Обов'язкове поле call_date порожнє.")
+    parsed_check = _parse_ua_date(check_date) or journal_today()
+    if managers is None:
+        managers = load_journal_managers(google_client)
+    directory = resolve_manager_from_directory(
+        managers,
+        project_key=route["key"],
+        manager_name=manager,
+        login=login,
     )
-    mapping = colmap or _FALLBACK_SHORT_COLS
-    return fields_to_letter_payload(fields, mapping)
-
-
-def build_friendly_row_payload(
-    *,
-    client_id: str,
-    call_date: date | None,
-    manager: str,
-    tl: str,
-    scores: dict[str, float | None],
-    check_date: date | None,
-    reviewer: str = VIP_JOURNAL_REVIEWER,
-    qa_comment: str = "",
-    colmap: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    fields = build_friendly_field_values(
-        client_id=client_id,
-        call_date=call_date,
-        manager=manager,
-        tl=tl,
-        scores=scores,
-        check_date=check_date,
-        reviewer=reviewer,
-        qa_comment=qa_comment,
+    checked = validate_scores(call_type, scores)
+    comment = build_comment_from_scores(call_type, checked, reasons)
+    desired = _desired_cells(
+        call_type,
+        client_id=client,
+        call_date=parsed_call,
+        manager=directory["manager"],
+        tl=directory["tl"],
+        scores=checked,
+        check_date=parsed_check,
+        comment=comment,
     )
-    mapping = colmap or _FALLBACK_FRIENDLY_COLS
-    return fields_to_letter_payload(fields, mapping)
+    missing = _missing_score_names(call_type, checked)
+    owner = analysis_id or f"{route['key']}:{call_type}:{client}:{parsed_call.isoformat()}:{directory['manager']}"
+    account = _writer_account(google_client)
+    book = _open_book(google_client)
+    worksheet = _worksheet(book, route)
+    route["row_count"] = int(getattr(worksheet, "row_count", 0) or 0)
+    if route["row_count"] < route["start_row"]:
+        raise VipJournalError("Журнал заповнений, треба розширити сітку.")
+    if str(getattr(worksheet, "title", "")) in _READ_ONLY_SHEETS:
+        raise VipJournalError("Цей аркуш записувати не можна.")
 
-
-def _load_dedup_store() -> dict:
-    try:
-        if _DEDUP_PATH.exists():
-            return json.loads(_DEDUP_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        logger.exception("Failed to read journal dedup store")
-    return {}
-
-
-def _save_dedup_store(data: dict) -> None:
-    try:
-        _DEDUP_DIR.mkdir(parents=True, exist_ok=True)
-        _DEDUP_PATH.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+    prior = list(prior_analyses or [])
+    if prior_analyses is None:
+        prior = _load_prior_scores(
+            supabase,
+            project=route["key"],
+            call_type=call_type,
+            client_id=client,
+            call_date=parsed_call,
+            manager=directory["manager"],
         )
-    except Exception:
-        logger.exception("Failed to write journal dedup store")
-
-
-def _supabase_get_mapping(analysis_id: str) -> dict | None:
-    try:
-        from supabase_logger import get_supabase_client
-
-        client, _err = get_supabase_client()
-        if client is None:
-            return None
-        res = (
-            client.table("vip_journal_writes")
-            .select("*")
-            .eq("analysis_id", analysis_id)
-            .limit(1)
-            .execute()
-        )
-        rows = getattr(res, "data", None) or []
-        return dict(rows[0]) if rows else None
-    except Exception:
-        return None
-
-
-def _supabase_upsert_mapping(record: dict) -> None:
-    try:
-        from supabase_logger import get_supabase_client
-
-        client, _err = get_supabase_client()
-        if client is None:
-            return
-        client.table("vip_journal_writes").upsert(record).execute()
-    except Exception:
-        logger.debug("vip_journal_writes upsert skipped", exc_info=True)
-
-
-def get_existing_write(analysis_id: str) -> dict | None:
-    remote = _supabase_get_mapping(analysis_id)
-    if remote:
-        return remote
-    local = _load_dedup_store()
-    item = local.get(analysis_id)
-    return dict(item) if isinstance(item, dict) else None
-
-
-def remember_write(analysis_id: str, record: dict) -> None:
-    payload = {"analysis_id": analysis_id, **record}
-    store = _load_dedup_store()
-    store[analysis_id] = payload
-    _save_dedup_store(store)
-    _supabase_upsert_mapping(payload)
-
-
-def _open_project_worksheet(google_client, route: dict):
-    workbook = google_client.open_by_key(VIP_JOURNAL_SHEET_ID)
-    try:
-        return workbook.get_worksheet_by_id(int(route["sheet_id"]))
-    except Exception:
-        return workbook.worksheet(str(route["title"]))
-
-
-def _a1(col: str, row: int) -> str:
-    return f"{col}{row}"
-
-
-def _parse_protected_data_index(exc: BaseException) -> int | None:
-    """APIError … Invalid data[N]: protected cell → N."""
-    import re
-
-    match = re.search(r"Invalid data\[(\d+)\]", str(exc), flags=re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
-
-
-def _write_one_cell(worksheet, row: int, col: str, value: Any) -> None:
-    # Один range через batch_update — той самий API, що вже ходить у Sheets;
-    # так protected на одній комірці не валить інші (на відміну від пакета з N ranges).
-    sheets_retry(
-        worksheet.batch_update,
-        [{"range": _a1(col, row), "values": [[value]]}],
-        value_input_option="USER_ENTERED",
-    )
-
-
-def _is_protected_cell_error(exc: BaseException) -> bool:
-    text = str(exc).lower()
-    return (
-        "protected" in text
-        or "захищен" in text
-        or "защищен" in text
-        or "you are trying to edit a protected cell" in text
-    )
-
-
-def _drop_formula_cells(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """Прибирає комірки, де вже стоїть формула (=…), щоб не бити захист «Бал за дзвінок»."""
-    if not payload:
-        return payload
-    cols = list(payload.keys())
-    try:
-        existing = _read_cells(worksheet, row, cols, formulas=True)
-    except Exception:
-        logger.debug("VIP journal formula probe failed row=%s", row, exc_info=True)
-        return dict(payload)
-    cleaned: dict[str, Any] = {}
-    for col, value in payload.items():
-        cell = str(existing.get(col) or "").strip()
-        if cell.startswith("="):
-            logger.warning(
-                "VIP journal skip formula cell %s%d (value starts with =)",
-                col,
-                row,
+    for earlier in prior:
+        earlier_scores = _scores_from_criteria(call_type, earlier.get("criteria_scores") or earlier.get("criteria") or [])
+        if _scores_conflict(checked, earlier_scores):
+            return _result(
+                False,
+                "Два аналізи розходяться",
+                route=route,
+                error="Два аналізи дають різні бали",
+                extra={"scores": checked, "other_scores": earlier_scores},
             )
-            continue
-        cleaned[col] = value
-    return cleaned
 
-
-def _write_cells_resilient(worksheet, row: int, payload: dict[str, Any]) -> dict[str, Any]:
-    """Пише по одній комірці: protected/формула не валить увесь рядок (бали все одно потрапляють)."""
-    pending = _drop_formula_cells(worksheet, row, dict(payload))
-    written: dict[str, Any] = {}
-    skipped: list[str] = []
-    for col, value in list(pending.items()):
+    lock = _process_lock(route["sheet_id"], call_type)
+    with lock:
+        _remote_lock(supabase, route["sheet_id"], call_type, owner)
         try:
-            _write_one_cell(worksheet, row, col, value)
-            written[col] = value
-        except Exception as exc:
-            if _is_protected_cell_error(exc):
-                skipped.append(col)
-                logger.warning(
-                    "VIP journal skip protected cell %s%d: %s",
-                    col,
-                    row,
-                    exc,
-                )
-                continue
-            raise
-    if not written:
-        raise VipJournalError(
-            "Усі комірки запису захищені; не вдалося записати рядок журналу."
-            + (f" Пропущено: {', '.join(skipped)}" if skipped else "")
-        )
-    if skipped:
-        logger.warning(
-            "VIP journal wrote row=%s cols=%s skipped_protected=%s",
-            row,
-            list(written.keys()),
-            skipped,
-        )
-    return written
+            return _write_locked(
+                book,
+                route,
+                call_type,
+                client,
+                parsed_call,
+                directory,
+                checked,
+                desired,
+                missing,
+                comment,
+                account,
+                dry_run,
+                sleep,
+                supabase,
+                owner,
+            )
+        finally:
+            _release_remote_lock(supabase, route["sheet_id"], call_type, owner)
 
 
-def _read_cells(
-    worksheet,
-    row: int,
-    cols: list[str],
-    *,
-    formulas: bool = False,
-) -> dict[str, str]:
-    ranges = [_a1(c, row) for c in cols]
-    if formulas:
-        result = sheets_retry(
-            worksheet.batch_get, ranges, value_render_option="FORMULA"
-        )
+def _write_locked(book, route, call_type, client, call_date, directory, scores, desired, missing, comment, account, dry_run, sleep, supabase, owner) -> dict:
+    headers, block_rows = _read_headers_and_block(book, route, call_type)
+    _check_headers(headers, call_type)
+    matches = _find_rows(block_rows, route, call_type, client, call_date, directory["manager"])
+    if len(matches) > 1:
+        listed = ", ".join(str(number) for number in matches)
+        status = f"Неоднозначно · рядки {listed}"
+        _remember(_log_record(route, call_type, client, call_date, directory, status, None, desired, {}, owner), supabase)
+        return _result(False, status, route=route, error=f"Неоднозначно: рядки {listed}")
+    if len(matches) == 1:
+        row_number = matches[0]
+        current = block_rows[row_number - route["start_row"]]
+        action, pending, detail = _plan_existing(current, call_type, desired, row_number)
+        if action == "conflict":
+            _remember(_log_record(route, call_type, client, call_date, directory, "Конфлікт", row_number, desired, current, owner), supabase)
+            return _result(False, f"Конфлікт · рядок {row_number}", route=route, row=row_number, error=detail)
+        if action == "same":
+            status = _status_text("same", route, row_number, [])
+            _remember(_log_record(route, call_type, client, call_date, directory, status, row_number, desired, current, owner), supabase)
+            return _result(True, status, route=route, row=row_number, extra={"duplicate": True})
+        to_write = pending
+        kind = "filled"
     else:
-        result = sheets_retry(worksheet.batch_get, ranges)
-    out: dict[str, str] = {}
-    for col, block in zip(cols, result):
-        cell = ""
-        if block and block[0]:
-            cell = str(block[0][0] if block[0] else "")
-        out[col] = cell.strip()
-    return out
+        row_number = _free_row(block_rows, route, call_type)
+        to_write = desired
+        kind = "created"
+
+    plan = [{"letter": letter, "value": cell["value"], "kind": cell["kind"]} for letter, cell in to_write.items()]
+    if dry_run:
+        return _result(
+            True,
+            f"План · {route['title']} · рядок {row_number}",
+            route=route,
+            row=row_number,
+            extra={"dry_run": True, "cells": plan},
+        )
+    requests = build_update_requests(route["sheet_id"], row_number, to_write)
+    _send_with_retry(
+        book,
+        route,
+        call_type,
+        requests,
+        row_number,
+        client,
+        call_date,
+        directory["manager"],
+        desired,
+        sleep,
+        account,
+    )
+    actual, formula = _read_written_row(book, route, call_type, row_number)
+    formula = _ensure_formula(book, route, call_type, row_number, formula, dry_run=False)
+    actual, formula = _read_written_row(book, route, call_type, row_number)
+    problems = _verify(actual, formula, call_type, desired, row_number)
+    if problems:
+        message = "Помилка перевірки: " + "; ".join(problems)
+        _remember(_log_record(route, call_type, client, call_date, directory, message, row_number, desired, actual, owner), supabase)
+        return _result(False, "Помилка перевірки", route=route, row=row_number, error=message)
+    status = _status_text(kind, route, row_number, missing)
+    _remember(_log_record(route, call_type, client, call_date, directory, status, row_number, desired, actual, owner), supabase)
+    return _result(True, status, route=route, row=row_number, extra={"written": plan, "comment": comment})
 
 
-def _normalize_verify(value) -> str:
-    text = str(value or "").strip()
-    if text.startswith("'"):
-        text = text[1:]
-    # числа з коми/крапки
+def _send_with_retry(book, route, call_type, requests, row_number, client, call_date, manager, desired, sleep, account: str) -> None:
+    delays = list(_BACKOFF_SECONDS)
+    while True:
+        try:
+            _commit(book, requests)
+            return
+        except Exception as exc:
+            if not _retryable(exc) or not delays:
+                ref = qualified_range(route["title"], f"A{row_number}")
+                raise VipJournalError(
+                    f"Помилка. {route['title']} {ref}: {_public_error(exc)}. Обліковий запис: {account}."
+                ) from exc
+            sleep(delays.pop(0))
+            _, rows = _read_headers_and_block(book, route, call_type)
+            current = rows[row_number - route["start_row"]] if row_number - route["start_row"] < len(rows) else {}
+            if _key_matches(current, call_type, client, call_date, manager):
+                action, _pending, _detail = _plan_existing(current, call_type, desired, row_number)
+                if action == "same":
+                    return
+
+
+def _log_record(route, call_type, client, call_date, directory, status, row, payload, actual, owner) -> dict:
+    return {
+        "analysis_id": owner,
+        "spreadsheet_id": VIP_JOURNAL_SHEET_ID,
+        "sheet_id": route["sheet_id"],
+        "sheet_title": route["title"],
+        "project": route["key"],
+        "call_type": call_type,
+        "client_id": client,
+        "call_date": call_date.isoformat(),
+        "manager": directory["manager"],
+        "row": row,
+        "status": status,
+        "payload": {letter: cell["value"] for letter, cell in payload.items()},
+        "actual": {letter: value for letter, value in (actual or {}).items() if not _cell_empty(value)},
+        "written_at": datetime.now(ZoneInfo(VIP_JOURNAL_TZ)).isoformat(),
+    }
+
+
+def _reasons_from_verdict(verdict_data: dict) -> dict[str, str]:
+    reasons = {}
+    for item in verdict_data.get("criteria") or []:
+        if not isinstance(item, dict) or not item.get("key"):
+            continue
+        parts = item.get("reasons") or []
+        if isinstance(parts, str):
+            parts = [parts]
+        text = "; ".join(clean_sheet_cell(part) for part in parts if clean_sheet_cell(part))
+        if not text and item.get("reason"):
+            text = clean_sheet_cell(item.get("reason"))
+        if text:
+            reasons[str(item["key"])] = text
+    return reasons
+
+
+def _scores_input(call_type: str, verdict_data: dict) -> dict[str, Any]:
+    by_key = {}
+    for item in verdict_data.get("criteria") or []:
+        if isinstance(item, dict) and item.get("key"):
+            by_key[str(item["key"])] = item.get("points")
+    return {
+        column["field"]: by_key.get(column["field"])
+        for column in block_layout(call_type)["columns"]
+        if column["kind"] == "score"
+    }
+
+
+def _optional_supabase():
     try:
-        num = float(text.replace(",", "."))
-        return f"{num:g}"
-    except ValueError:
-        return " ".join(text.casefold().replace("\r\n", "\n").split())
+        from supabase_logger import get_supabase_client
 
-
-def _payload_matches(
-    expected: dict[str, Any],
-    actual: dict[str, str],
-    *,
-    strict_cols: set[str] | None = None,
-) -> bool:
-    """Перевірка ключових полів. Дати/коментар — soft (не блокують успіх)."""
-    for col, want in expected.items():
-        if want == "" or want is None:
-            continue
-        if strict_cols is not None and col not in strict_cols:
-            continue
-        got = actual.get(col, "")
-        if _normalize_verify(want) != _normalize_verify(got):
-            return False
-    return True
-
-
-def _strict_cols_for_fields(fields: dict[str, Any], colmap: dict[str, str]) -> set[str]:
-    strict: set[str] = set()
-    for field, value in fields.items():
-        if value == "" or value is None:
-            continue
-        if field in _SOFT_FIELD_KEYS or field == "total_score":
-            continue
-        letter = colmap.get(field)
-        if letter:
-            strict.add(letter)
-    return strict
-
-
-def _col_letter_to_index(letter: str) -> int:
-    n = 0
-    for ch in str(letter or "").upper():
-        if "A" <= ch <= "Z":
-            n = n * 26 + (ord(ch) - 64)
-    return n
+        client, _error = get_supabase_client()
+        return client
+    except Exception:
+        logger.debug("Supabase для журналу недоступний", exc_info=True)
+        return None
 
 
 def write_vip_journal_result(
@@ -939,189 +1190,273 @@ def write_vip_journal_result(
     *,
     spreadsheet_id: str | None = None,
     managers: list[dict] | None = None,
+    dry_run: bool = False,
+    supabase=None,
+    sleeper=None,
 ) -> dict:
-    """Запис одного дзвінка в журнал. Повертає статус-словник.
-
-    Успіх: {"ok": True, "status": "Записано", "row": N, "analysis_id": ..., ...}
-    Дедуп: {"ok": True, "status": "Записано", "duplicate": True, ...}
-    Помилка: {"ok": False, "error": "..."}.
-    """
-    _ = spreadsheet_id  # завжди VIP_JOURNAL_SHEET_ID за ТЗ
+    """Вхід застосунку. Той самий алгоритм, що й write_journal_call."""
+    _ = spreadsheet_id
     try:
         call_type = resolve_journal_call_type(
-            call.get("journal_call_type")
-            or call.get("vip_call_type")
-            or verdict_data.get("call_type")
+            call.get("journal_call_type") or call.get("vip_call_type") or verdict_data.get("call_type")
         )
         if not call_type:
-            raise VipJournalError(
-                "Невідомий тип дзвінка (очікується short або friendly з вибору аналізатора)."
-            )
-        route = resolve_project_route(call.get("project"))
-        client_id = str(call.get("client_id") or "").strip()
-        if not client_id:
-            raise VipJournalError("Обов'язкове поле client_id порожнє.")
-        call_date = _parse_ua_date(call.get("call_date"))
-        if call_date is None:
-            raise VipJournalError("Обов'язкове поле call_date порожнє.")
-        check_date = _parse_ua_date(
-            call.get("check_date") or call.get("listen_date")
-        ) or journal_today()
-
-        analysis_id = str(call.get("analysis_id") or "").strip() or make_analysis_id(
-            call, call_type
-        )
-        existing = get_existing_write(analysis_id)
-        if existing and existing.get("row"):
-            return {
-                "ok": True,
-                "status": "Записано",
-                "duplicate": True,
-                "analysis_id": analysis_id,
-                "row": int(existing["row"]),
-                "sheet_title": existing.get("sheet_title") or route["title"],
-                "sheet_id": existing.get("sheet_id") or route["sheet_id"],
-                "call_type": call_type,
-                "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
-                "critical_reasons": list(verdict_data.get("critical_reasons") or []),
-            }
-
-        if managers is None:
-            managers = load_journal_managers(google_client)
-        manager_row = resolve_manager_from_directory(
-            managers,
-            project_key=route["key"],
-            manager_name=str(call.get("ret_manager") or call.get("manager") or ""),
+            raise VipJournalError("Невідомий тип дзвінка (очікується short або friendly).")
+        if supabase is False:
+            remote = None
+        elif supabase is None:
+            remote = _optional_supabase()
+        else:
+            remote = supabase
+        analysis_id = str(call.get("analysis_id") or "").strip() or make_analysis_id(call, call_type)
+        result = write_journal_call(
+            google_client,
+            project=str(call.get("project") or ""),
+            call_type=call_type,
+            client_id=str(call.get("client_id") or ""),
+            call_date=call.get("call_date"),
+            manager=str(call.get("ret_manager") or call.get("manager") or ""),
             login=str(call.get("manager_login") or call.get("login") or ""),
+            scores=_scores_input(call_type, verdict_data),
+            check_date=call.get("check_date") or call.get("listen_date"),
+            reasons=_reasons_from_verdict(verdict_data),
+            managers=managers,
+            dry_run=dry_run,
+            supabase=remote,
+            analysis_id=analysis_id,
+            sleeper=sleeper,
         )
-        manager_name = clean_sheet_cell(manager_row.get("manager"))
-        tl_name = clean_sheet_cell(manager_row.get("tl"))
-
-        qa_comment = build_journal_qa_comment(call, verdict_data)
-        start_row = int(route["start_row"])
-
-        with _WRITE_LOCK:
-            worksheet = _open_project_worksheet(google_client, route)
-            col_maps = load_journal_column_map(worksheet)
-            block_key = (
-                "short"
-                if call_type == VIP_JOURNAL_CALL_TYPE_SHORT
-                else "friendly"
-            )
-            colmap = col_maps[block_key]
-            skip_letters = set(col_maps.get("skip") or ())
-            if call_type == VIP_JOURNAL_CALL_TYPE_SHORT:
-                scores = extract_short_scores(verdict_data)
-                fields = build_short_field_values(
-                    client_id=client_id,
-                    call_date=call_date,
-                    manager=manager_name,
-                    tl=tl_name,
-                    scores=scores,
-                    check_date=check_date,
-                    qa_comment=qa_comment,
-                )
-            else:
-                scores = extract_friendly_scores(verdict_data)
-                fields = build_friendly_field_values(
-                    client_id=client_id,
-                    call_date=call_date,
-                    manager=manager_name,
-                    tl=tl_name,
-                    scores=scores,
-                    check_date=check_date,
-                    qa_comment=qa_comment,
-                )
-            payload = fields_to_letter_payload(
-                fields, colmap, skip_letters=skip_letters
-            )
-            if not payload:
-                raise VipJournalError("Порожній payload для запису в журнал.")
-
-            id_col = colmap.get("client_id")
-            if not id_col:
-                raise VipJournalError("Не знайдено колонку ID клієнта в заголовках журналу.")
-            id_col_index = _col_letter_to_index(id_col)
-            manager_col_index = _col_letter_to_index(colmap.get("manager") or id_col)
-            score_col_index = _col_letter_to_index(colmap.get("contact") or id_col)
-            strict_cols = _strict_cols_for_fields(fields, colmap)
-
-            row = None
-            last_verify_error = ""
-            written_payload = payload
-            for attempt in range(3):
-                id_vals = sheets_retry(worksheet.col_values, id_col_index)
-                mgr_vals = sheets_retry(worksheet.col_values, manager_col_index)
-                score_vals = sheets_retry(worksheet.col_values, score_col_index)
-                candidate = find_next_journal_row(
-                    id_vals,
-                    start_row=start_row if row is None else max(start_row, int(row) + 1),
-                    extra_cols=[mgr_vals, score_vals],
-                )
-                # Формули / protected клітинки пропускаємо; бали й метадані все одно пишемо.
-                written_payload = _write_cells_resilient(worksheet, candidate, payload)
-                verify_cols = list(written_payload.keys())
-                written_strict = {c for c in strict_cols if c in written_payload}
-                actual = _read_cells(worksheet, candidate, verify_cols)
-                if _payload_matches(
-                    written_payload, actual, strict_cols=written_strict or None
-                ):
-                    row = candidate
-                    break
-                last_verify_error = (
-                    f"Верифікація запису не пройшла (рядок {candidate}, "
-                    f"{route['title']}/{call_type}, спроба {attempt + 1})."
-                )
-                logger.warning(
-                    "VIP journal verify mismatch analysis_id=%s row=%s attempt=%s actual=%s colmap=%s",
-                    analysis_id,
-                    candidate,
-                    attempt + 1,
-                    {k: actual.get(k) for k in sorted(written_strict)},
-                    colmap,
-                )
-                if _normalize_verify(actual.get(id_col)) == _normalize_verify(
-                    written_payload.get(id_col)
-                ):
-                    row = candidate
-                    break
-                row = candidate
-
-            if row is None:
-                raise VipJournalError(last_verify_error or "Не вдалося записати рядок журналу.")
-
-            mapping = {
-                "spreadsheet_id": VIP_JOURNAL_SHEET_ID,
-                "sheet_id": route["sheet_id"],
-                "sheet_title": route["title"],
-                "call_type": call_type,
-                "row": row,
-                "project": route["key"],
-                "written_at": datetime.now(ZoneInfo(VIP_JOURNAL_TZ)).isoformat(),
-                "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
-                "critical_reasons": list(verdict_data.get("critical_reasons") or []),
-            }
-            remember_write(analysis_id, mapping)
-
-        from utils import BUILD_SHA
-
-        written_cols = ",".join(written_payload.keys()) if written_payload else ""
-        return {
-            "ok": True,
-            "status": f"Записано · {route['title']} · рядок {row} · {BUILD_SHA}",
-            "duplicate": False,
-            "analysis_id": analysis_id,
-            "row": row,
-            "sheet_title": route["title"],
-            "sheet_id": route["sheet_id"],
-            "call_type": call_type,
-            "written_cols": written_cols,
-            "is_critical_fail": bool(verdict_data.get("is_critical_fail")),
-            "critical_reasons": list(verdict_data.get("critical_reasons") or []),
-        }
+        result["analysis_id"] = analysis_id
+        result["call_type"] = call_type
+        return result
     except VipJournalError as exc:
-        logger.warning("VIP journal validation/write blocked: %s", exc)
-        return {"ok": False, "error": str(exc), "status": "Помилка запису"}
+        logger.warning("VIP journal write blocked: %s", exc)
+        return {"ok": False, "status": "Помилка", "error": str(exc)}
     except Exception as exc:
         logger.exception("VIP journal write failed")
-        return {"ok": False, "error": str(exc), "status": "Помилка запису"}
+        return {
+            "ok": False,
+            "status": "Помилка",
+            "error": _public_error(exc),
+        }
+
+
+def _comment_score_for(text: str, keyword: str) -> float | None:
+    if not text or not keyword:
+        return None
+    token = normalize_header(keyword)
+    stem = token[:6] if len(token) > 6 else token
+    for line in str(text).splitlines() or [str(text)]:
+        folded = normalize_header(line)
+        if stem not in folded:
+            continue
+        ratio = re.search(r"(\d+(?:[.,]\d+)?)\s*[/⁄∕／]\s*(\d+(?:[.,]\d+)?)", line)
+        words = re.search(r"(\d+(?:[.,]\d+)?)\s*із\s*(\d+(?:[.,]\d+)?)", line)
+        match = ratio or words
+        if match:
+            return float(match.group(1).replace(",", "."))
+    return None
+
+
+def audit_block(
+    *,
+    sheet_title: str,
+    call_type: str,
+    rows: list[dict[str, Any]],
+    start_row: int,
+    directory: list[dict],
+    project_key: str,
+) -> list[dict[str, str]]:
+    """Лише звіт. Рядки не змінює."""
+    issues = []
+    seen: dict[tuple, list[int]] = {}
+    block = block_layout(call_type)
+    letters = {column["field"]: column for column in block["columns"]}
+    for offset, row in enumerate(rows):
+        number = start_row + offset
+        client = _id_text(row.get(letters["client_id"]["letter"]))
+        if not client:
+            continue
+        manager = clean_sheet_cell(row.get(letters["manager"]["letter"]))
+        tl = clean_sheet_cell(row.get(letters["tl"]["letter"]))
+        comment = row.get(letters["comment"]["letter"])
+        call_date = serial_to_date(row.get(letters["call_date"]["letter"]))
+        key = (client, call_date.isoformat() if call_date else "", manager)
+        seen.setdefault(key, []).append(number)
+        if not tl:
+            issues.append(_issue(sheet_title, call_type, number, client, "порожній TL", manager))
+        matches = [
+            item
+            for item in directory
+            if normalize_project_key(item.get("project")) == project_key
+            and clean_sheet_cell(item.get("manager")) == manager
+        ]
+        if len(matches) != 1:
+            issues.append(_issue(sheet_title, call_type, number, client, "менеджер не з довідника", manager))
+        elif clean_sheet_cell(matches[0].get("tl")) != tl and tl:
+            issues.append(
+                _issue(
+                    sheet_title,
+                    call_type,
+                    number,
+                    client,
+                    "TL не відповідає довіднику",
+                    f"{tl} / {matches[0].get('tl')}",
+                )
+            )
+        if isinstance(comment, (int, float)) and not isinstance(comment, bool):
+            issues.append(_issue(sheet_title, call_type, number, client, "коментар збережено числом", comment))
+        elif comment_has_ratio(comment):
+            issues.append(_issue(sheet_title, call_type, number, client, "коментар містить N/M", comment))
+        formula = str(row.get(block["formula"]["letter"]) or "")
+        expected = block["formula"]["template"].format(row=number)
+        if not formula.startswith("="):
+            issues.append(_issue(sheet_title, call_type, number, client, "немає формули", block["formula"]["letter"]))
+        elif formula.replace(" ", "").upper() != expected.replace(" ", "").upper():
+            issues.append(_issue(sheet_title, call_type, number, client, "формулу змінено", formula))
+        for column in block["columns"]:
+            if column["kind"] != "score":
+                continue
+            value = row.get(column["letter"])
+            if _cell_empty(value):
+                continue
+            try:
+                _canonical_score(column["field"], value, column["allowed"])
+            except VipJournalError:
+                issues.append(_issue(sheet_title, call_type, number, client, "бал поза дозволеними", f"{column['letter']}={value}"))
+            mentioned = _comment_score_for(str(comment or ""), column["keyword"])
+            if mentioned is not None and not _same_number(value, mentioned):
+                issues.append(
+                    _issue(
+                        sheet_title,
+                        call_type,
+                        number,
+                        client,
+                        "бал у клітинці не збігається з коментарем",
+                        f"{column['letter']}={value}, коментар={mentioned}",
+                    )
+                )
+    for key, numbers in seen.items():
+        if len(numbers) > 1 and key[0]:
+            issues.append(
+                _issue(
+                    sheet_title,
+                    call_type,
+                    numbers[0],
+                    key[0],
+                    "дубль ключа дзвінка",
+                    ", ".join(str(number) for number in numbers),
+                )
+            )
+    return issues
+
+
+def _issue(sheet, call_type, row, client, kind, detail) -> dict[str, str]:
+    return {
+        "sheet": sheet,
+        "block": call_type,
+        "row": str(row),
+        "client_id": str(client),
+        "issue": kind,
+        "detail": str(detail),
+    }
+
+
+def plan_safe_fixes(
+    *,
+    sheet_title: str,
+    call_type: str,
+    rows: list[dict[str, Any]],
+    start_row: int,
+    directory: list[dict],
+    project_key: str,
+    sheet_id: int,
+) -> list[dict[str, Any]]:
+    """Лише порожній TL з довідника і N/M, якщо бал у тексті дорівнює клітинці."""
+    plans = []
+    letters = {column["field"]: column for column in block_layout(call_type)["columns"]}
+    for offset, row in enumerate(rows):
+        number = start_row + offset
+        client = _id_text(row.get(letters["client_id"]["letter"]))
+        if not client:
+            continue
+        manager = clean_sheet_cell(row.get(letters["manager"]["letter"]))
+        tl = clean_sheet_cell(row.get(letters["tl"]["letter"]))
+        if not tl:
+            matches = [
+                item
+                for item in directory
+                if normalize_project_key(item.get("project")) == project_key
+                and clean_sheet_cell(item.get("manager")) == manager
+                and clean_sheet_cell(item.get("tl"))
+            ]
+            if len(matches) == 1:
+                plans.append(
+                    {
+                        "sheet": sheet_title,
+                        "sheet_id": sheet_id,
+                        "row": number,
+                        "letter": letters["tl"]["letter"],
+                        "value": clean_sheet_cell(matches[0].get("tl")),
+                        "reason": "порожній TL",
+                    }
+                )
+        comment = row.get(letters["comment"]["letter"])
+        if not isinstance(comment, str) or not comment_has_ratio(comment):
+            continue
+        safe = True
+        for column in block_layout(call_type)["columns"]:
+            if column["kind"] != "score":
+                continue
+            mentioned = _comment_score_for(comment, column["keyword"])
+            if mentioned is None:
+                continue
+            actual = row.get(column["letter"])
+            if _cell_empty(actual) or not _same_number(actual, mentioned):
+                safe = False
+        if not safe:
+            continue
+        replaced = re.sub(
+            r"(\d+(?:[.,]\d+)?)\s*[/⁄∕／]\s*(\d+(?:[.,]\d+)?)",
+            lambda match: f"{match.group(1).replace('.', ',')} із {match.group(2).replace('.', ',')}",
+            comment,
+        )
+        if replaced != comment and not comment_has_ratio(replaced):
+            plans.append(
+                {
+                    "sheet": sheet_title,
+                    "sheet_id": sheet_id,
+                    "row": number,
+                    "letter": letters["comment"]["letter"],
+                    "value": replaced,
+                    "reason": "N/M збігається з балом",
+                }
+            )
+    return plans
+
+
+def apply_safe_fixes(book, plans: list[dict[str, Any]]) -> None:
+    requests = []
+    for plan in plans:
+        if plan["sheet"] in _READ_ONLY_SHEETS:
+            raise VipJournalError(f"Аркуш {plan['sheet']} не записується.")
+        letter = plan["letter"]
+        if letter in _NEVER_WRITE or letter == "N":
+            raise VipJournalError(f"Безпечне виправлення не пише колонку {letter}.")
+        index = column_number(letter) - 1
+        requests.append(
+            {
+                "updateCells": {
+                    "range": {
+                        "sheetId": int(plan["sheet_id"]),
+                        "startRowIndex": int(plan["row"]) - 1,
+                        "endRowIndex": int(plan["row"]),
+                        "startColumnIndex": index,
+                        "endColumnIndex": index + 1,
+                    },
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": str(plan["value"])}}]}],
+                    "fields": "userEnteredValue",
+                }
+            }
+        )
+    _commit(book, requests)

@@ -1,399 +1,618 @@
-"""Unit tests for VIP project journal routing / payloads (без Google API)."""
+"""16 сценаріїв запису журналу без мережі. Фікстури — рядки зі ТЗ 18.11.2026.
+
+Повні клітинки 4493604 і 4642127 у цій машині не було. Відомі факти:
+3093024 — у коментарі контакт 2.5/5, у F стоїть 5; 7490399 — френдлі з N/M.
+"""
+
+from __future__ import annotations
+
+from datetime import date
 
 import pytest
 
-from constants import VIP_JOURNAL_PROJECTS
 from vip_journal_sheets import (
+    JOURNAL_LAYOUT,
     VipJournalError,
-    build_friendly_row_payload,
-    build_short_row_payload,
-    discover_journal_columns,
-    extract_friendly_scores,
-    extract_short_scores,
-    find_next_journal_row,
-    make_analysis_id,
-    normalize_project_key,
-    parse_journal_managers,
-    resolve_journal_call_type,
-    resolve_manager_from_directory,
-    resolve_project_route,
+    audit_block,
+    column_letter,
+    column_number,
+    date_to_serial,
+    plan_safe_fixes,
+    write_journal_call,
 )
 
-
-def test_project_routing_start_rows():
-    assert resolve_project_route("Betking")["start_row"] == 3
-    assert resolve_project_route("777")["start_row"] == 3
-    assert resolve_project_route("Vegas")["start_row"] == 5
-    assert resolve_project_route("vegas")["sheet_id"] == VIP_JOURNAL_PROJECTS["vegas"]["sheet_id"]
-    with pytest.raises(VipJournalError):
-        resolve_project_route("unknown")
-
-
-def test_call_type_from_analyzer_choice_not_duration():
-    assert resolve_journal_call_type("short") == "short"
-    assert resolve_journal_call_type("friendly") == "friendly"
-    assert resolve_journal_call_type("Короткий 90 сек") == "short"
-    assert resolve_journal_call_type("Короткий 120 сек") == "short"
-    assert resolve_journal_call_type("VIP Friendly (2-й дзвінок)") == "friendly"
-    assert resolve_journal_call_type("vip_friendly") == "friendly"
-    assert resolve_journal_call_type("") is None
-
-
-def test_normalize_project_aliases():
-    assert normalize_project_key("BETKING") == "betking"
-    assert normalize_project_key("Вегас") == "vegas"
-    assert normalize_project_key("777") == "777"
+CALL_DATE = date(2026, 11, 5)
+CHECK_DATE = date(2026, 11, 18)
+MANAGERS = [
+    ["Проєкт", "TL", "Менеджер", "Логін"],
+    ["Betking", "Окороков Iван", "Головацький Назар", "nazar"],
+    ["777", "Крисак Іван", "Клименко Артем", "artem"],
+    ["Vegas", "Олег", "Вегас Менеджер", "vegas"],
+    ["Betking", "Перший TL", "Подвійний", "duo"],
+    ["Betking", "Другий TL", "Подвійний", "duo"],
+]
+SHORT_SCORES = {"contact": 5, "slip_handling": 10, "prep": 7.5, "closing": 2.5}
+FRIENDLY_SCORES = {
+    "contact": 5,
+    "friendly_development": 7.5,
+    "personal_approach": 5,
+    "call_to_action": 10,
+    "bonus_offer": 2.5,
+    "prep": 7.5,
+    "closing": 5,
+    "ease": 2.5,
+}
 
 
-def test_short_scores_allow_zero_keep_empty_missing():
-    verdict = {
-        "criteria": [
-            {"key": "contact", "points": 0},
-            {"key": "slip_handling", "points": 7.5},
-            {"key": "prep", "points": 10},
-            # closing відсутній → None (не 0)
-        ]
-    }
-    scores = extract_short_scores(verdict)
-    assert scores["contact"] == 0.0
-    assert scores["slip_handling"] == 7.5
-    assert scores["prep"] == 10.0
-    assert scores["closing"] is None
+def _headers() -> dict[str, str]:
+    headers = {}
+    for block in JOURNAL_LAYOUT["blocks"].values():
+        for column in block["columns"]:
+            headers[column["letter"]] = column["header"]
+    headers["G"] = "Робота менеджера зі «зливом»"
+    headers["H"] = "Робота з негативом/заперечення P.R.E.P"
+    headers["Y"] = "Робота з негативом/заперечення P.R.E.P"
+    return headers
 
 
-def test_friendly_cta_rejects_7_5():
-    verdict = {
-        "criteria": [
-            {"key": "contact", "points": 5},
-            {"key": "friendly_development", "points": 7.5},
-            {"key": "personal_approach", "points": 7.5},
-            {"key": "call_to_action", "points": 7.5},
-            {"key": "bonus_offer", "points": 5},
-            {"key": "prep", "points": 10},
-            {"key": "closing", "points": 5},
-            {"key": "ease", "points": 7.5},
-        ]
-    }
-    with pytest.raises(VipJournalError):
-        extract_friendly_scores(verdict)
+class _Worksheet:
+    def __init__(self, book):
+        self.title = book.route["title"]
+        self.id = book.route["sheet_id"]
+        self.row_count = book.row_count
 
 
-def test_friendly_max_scores_payload_skips_formula_and_qa_cols():
-    from datetime import date
+class FakeBook:
+    def __init__(self, project: str, row_count: int = 12):
+        self.route = dict(JOURNAL_LAYOUT["projects"][project])
+        self.row_count = row_count
+        self.headers = _headers()
+        self.cells: dict[tuple[int, str], object] = {}
+        self.formulas: dict[tuple[int, str], str] = {}
+        self.updates: list[dict] = []
+        self.attempts: list[dict] = []
+        self.reads: list[str] = []
+        self.fail_writes = 0
+        self.applied = False
+        self.corrupt_comment = False
+        self.id = "spreadsheet"
 
-    scores = {
-        "contact": 5.0,
-        "friendly_development": 7.5,
-        "personal_approach": 7.5,
-        "call_to_action": 10.0,
-        "bonus_offer": 5.0,
-        "prep": 10.0,
-        "closing": 5.0,
-        "ease": 7.5,
-    }
-    payload = build_friendly_row_payload(
-        client_id="01234",
-        call_date=date(2026, 11, 10),
-        manager="Тест Менеджер",
-        tl="ТЛ",
+    def get_worksheet_by_id(self, sheet_id: int):
+        assert int(sheet_id) == int(self.route["sheet_id"])
+        return _Worksheet(self)
+
+    def values_batch_get(self, ranges, params=None):
+        render = (params or {}).get("valueRenderOption", "FORMATTED_VALUE")
+        blocks = []
+        for ref in ranges:
+            self.reads.append(ref)
+            blocks.append({"range": ref, "values": self._values(ref, render)})
+        return {"valueRanges": blocks}
+
+    def batch_update(self, body):
+        self.attempts.append(body)
+        if self.fail_writes:
+            self.fail_writes -= 1
+            raise RuntimeError("429 rate limit")
+        for request in body.get("requests") or []:
+            update = request["updateCells"]
+            assert update["fields"] == "userEnteredValue"
+            grid = update["range"]
+            row = grid["startRowIndex"] + 1
+            column = grid["startColumnIndex"]
+            for cell in update["rows"][0]["values"]:
+                letter = column_letter(column + 1)
+                entered = cell["userEnteredValue"]
+                if "formulaValue" in entered:
+                    self.formulas[(row, letter)] = entered["formulaValue"]
+                elif "stringValue" in entered:
+                    self.cells[(row, letter)] = entered["stringValue"]
+                elif "numberValue" in entered:
+                    self.cells[(row, letter)] = entered["numberValue"]
+                column += 1
+        self.applied = True
+        self.updates.append(body)
+
+    def _values(self, ref: str, render: str) -> list[list]:
+        _sheet, start, end = _parse_ref(ref)
+        rows = []
+        for row in range(start[1], end[1] + 1):
+            line = []
+            for number in range(column_number(start[0]), column_number(end[0]) + 1):
+                letter = column_letter(number)
+                if row == self.route["header_row"] and letter in self.headers and start[1] == self.route["header_row"]:
+                    line.append(self.headers.get(letter, ""))
+                    continue
+                if render == "FORMULA" and (row, letter) in self.formulas:
+                    line.append(self.formulas[(row, letter)])
+                    continue
+                value = self.cells.get((row, letter), "")
+                if (
+                    self.corrupt_comment
+                    and self.applied
+                    and letter in {"L", "AD"}
+                    and value != ""
+                ):
+                    value = 10
+                line.append(value)
+            rows.append(line)
+        return rows
+
+
+class FakeClient:
+    def __init__(self, book: FakeBook):
+        self.book = book
+        self.http = type("Http", (), {})()
+        self.http.credentials = type("Creds", (), {"service_account_email": "writer@example.com"})()
+
+    def open_by_key(self, _key):
+        return self.book
+
+
+def _parse_ref(ref: str):
+    sheet, _, cells = ref.rpartition("!")
+    sheet = sheet[1:-1].replace("''", "'") if sheet.startswith("'") else sheet
+    start, _, end = cells.partition(":")
+
+    def parse(token: str):
+        letters = "".join(char for char in token if char.isalpha())
+        row = int("".join(char for char in token if char.isdigit()))
+        return letters, row
+
+    return sheet, parse(start), parse(end or start)
+
+
+def _client(project: str) -> tuple[FakeClient, FakeBook]:
+    book = FakeBook(project)
+    return FakeClient(book), book
+
+
+def _write(project: str, call_type: str, client_id: str, scores: dict, **kwargs):
+    client, book = _client(project)
+    managers = kwargs.pop("managers", MANAGERS)
+    result = write_journal_call(
+        client,
+        project=project,
+        call_type=call_type,
+        client_id=client_id,
+        call_date=kwargs.pop("call_date", CALL_DATE),
+        manager=kwargs.pop("manager", _manager_for(project)),
         scores=scores,
-        check_date=date(2026, 11, 10),
+        check_date=kwargs.pop("check_date", CHECK_DATE),
+        managers=parse_managers(managers),
+        supabase=False,
+        sleeper=kwargs.pop("sleeper", lambda _seconds: None),
+        **kwargs,
     )
-    assert payload["O"].startswith("'")
-    assert "S" not in payload  # Статус від TL
-    assert "AB" not in payload  # формула балу
-    assert payload["AC"] == "АІ"
-    assert payload["T"] == 5.0  # контакт
-    assert payload["AA"] == 7.5  # невимушеність
-    assert payload["Z"] == 5.0  # завершення
-    assert sum(v for v in scores.values()) == 57.5
+    return result, book
 
 
-def test_journal_comment_uses_score_results_not_manual_card_note():
-    from vip_journal_sheets import build_journal_qa_comment
+def parse_managers(rows):
+    from vip_journal_sheets import parse_journal_managers
 
-    verdict = {
-        "criteria": [
-            {
-                "key": "contact",
-                "label": "Встановлення контакту",
-                "points": 2.5,
-                "max_points": 5,
-                "reasons": ["Відсутній елемент привітання: ім'я клієнта"],
-            }
-        ]
+    return parse_journal_managers(rows)
+
+
+def _manager_for(project: str) -> str:
+    return {
+        "betking": "Головацький Назар",
+        "777": "Клименко Артем",
+        "vegas": "Вегас Менеджер",
+    }[project]
+
+
+def _entered(book: FakeBook):
+    found = []
+    for body in book.updates:
+        for request in body.get("requests") or []:
+            grid = request["updateCells"]["range"]
+            row = grid["startRowIndex"] + 1
+            column = grid["startColumnIndex"]
+            for cell in request["updateCells"]["rows"][0]["values"]:
+                found.append((row, column_letter(column + 1), cell["userEnteredValue"]))
+                column += 1
+    return found
+
+
+def test_01_new_short_betking_uses_row_3_and_skips_e_j_n():
+    result, book = _write("betking", "short", "4493604", SHORT_SCORES)
+    assert result["ok"] is True
+    assert result["row"] == 3
+    assert result["status"].startswith("Записано · Betking · рядок 3")
+    letters = {letter for _row, letter, _value in _entered(book)}
+    assert "E" not in letters
+    assert "N" not in letters
+    data_letters = {
+        letter
+        for _row, letter, value in _entered(book)
+        if "formulaValue" not in value
     }
-    comment = build_journal_qa_comment({"qa_comment": "ручний текст з картки"}, verdict)
-    assert "ручний текст з картки" not in comment
-    assert "ім'я клієнта" in comment
-    assert "Встановлення контакту" in comment
+    assert "J" not in data_letters
+    formula = [value for _row, letter, value in _entered(book) if letter == "J"]
+    assert formula == [{"formulaValue": "=SUM(F3:I3)"}]
+    tl = [value for _row, letter, value in _entered(book) if letter == "D"][0]
+    assert tl == {"stringValue": "Окороков Iван"}
+    assert "I" in tl["stringValue"] and "І" not in tl["stringValue"]
 
 
-def test_short_payload_skips_formula_writes_result_comment():
-    from datetime import date
+def test_02_new_friendly_vegas_row_5_has_tl():
+    result, book = _write("vegas", "friendly", "7001001", FRIENDLY_SCORES)
+    assert result["ok"] is True
+    assert result["row"] == 5
+    tl = [value for row, letter, value in _entered(book) if row == 5 and letter == "R"]
+    assert tl == [{"stringValue": "Олег"}]
 
-    scores = {"contact": 5.0, "slip_handling": 10.0, "prep": 10.0, "closing": 5.0}
-    payload = build_short_row_payload(
-        client_id="99",
-        call_date=date(2026, 9, 1),
-        manager="Менеджер",
-        tl="TL",
+
+def test_03_friendly_uses_the_row_already_taken_by_short():
+    client, book = _client("betking")
+    book.cells[(3, "A")] = "4493604"
+    book.cells[(3, "C")] = "Головацький Назар"
+    book.cells[(3, "F")] = 5
+    result = write_journal_call(
+        client,
+        project="betking",
+        call_type="friendly",
+        client_id="7001002",
+        call_date=CALL_DATE,
+        manager="Головацький Назар",
+        scores=FRIENDLY_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
+    )
+    assert result["row"] == 3
+    assert book.cells[(3, "A")] == "4493604"
+    assert book.cells[(3, "F")] == 5
+    assert book.cells[(3, "O")] == "7001002"
+    short_letters = {
+        letter
+        for _row, letter, _value in _entered(book)
+        if column_number(letter) < column_number("O")
+    }
+    assert not short_letters
+
+
+def test_04_formula_and_reviewer_do_not_occupy_a_row():
+    client, book = _client("betking")
+    book.formulas[(3, "J")] = "=SUM(F3:I3)"
+    book.cells[(3, "K")] = "АІ"
+    result = write_journal_call(
+        client,
+        project="betking",
+        call_type="short",
+        client_id="4493604",
+        call_date=CALL_DATE,
+        manager="Головацький Назар",
+        scores=SHORT_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
+    )
+    assert result["row"] == 3
+    assert book.cells[(3, "A")] == "4493604"
+    assert book.formulas[(3, "J")] == "=SUM(F3:I3)"
+
+
+def test_05_leading_zero_id_stays_text():
+    _result, book = _write("betking", "short", "048284", SHORT_SCORES)
+    stored = [value for _row, letter, value in _entered(book) if letter == "A"]
+    assert stored == [{"stringValue": "048284"}]
+    assert book.cells[(3, "A")] == "048284"
+
+
+def test_06_slash_comment_is_rejected_and_iz_stays_text():
+    client, book = _client("777")
+    with pytest.raises(VipJournalError, match="N/M"):
+        write_journal_call(
+            client,
+            project="777",
+            call_type="friendly",
+            client_id="7490399",
+            call_date=CALL_DATE,
+            manager="Клименко Артем",
+            scores=FRIENDLY_SCORES,
+            reasons={"contact": "було 2.5/5"},
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    assert book.updates == []
+    result, clean = _write("777", "short", "4642127", {"contact": 2.5, "slip_handling": 0, "prep": 5, "closing": 2.5})
+    assert result["ok"] is True
+    comment = [value for _row, letter, value in _entered(clean) if letter == "L"][0]
+    assert "stringValue" in comment
+    assert "2,5 із 5" in comment["stringValue"]
+    assert "/" not in comment["stringValue"]
+    assert comment["stringValue"] == clean.cells[(3, "L")]
+
+
+def test_07_missing_score_is_not_written_as_zero():
+    scores = dict(SHORT_SCORES)
+    scores["prep"] = None
+    result, book = _write("betking", "short", "4493604", scores)
+    assert result["ok"] is True
+    assert result["status"].startswith("Неповні бали · рядок 3")
+    assert "P.R.E.P" in result["status"]
+    assert all(letter != "H" for _row, letter, _value in _entered(book))
+    comment = book.cells[(3, "L")]
+    assert "P.R.E.P: не оцінено" in comment
+    assert "P.R.E.P: 0 із" not in comment
+
+
+def test_08_seven_and_half_is_not_allowed_in_call_to_action():
+    client, book = _client("vegas")
+    scores = dict(FRIENDLY_SCORES)
+    scores["call_to_action"] = 7.5
+    with pytest.raises(VipJournalError, match="call_to_action"):
+        write_journal_call(
+            client,
+            project="vegas",
+            call_type="friendly",
+            client_id="7001003",
+            call_date=CALL_DATE,
+            manager="Вегас Менеджер",
+            scores=scores,
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    assert book.updates == []
+
+
+def test_09_existing_score_conflict_writes_nothing():
+    client, book = _client("vegas")
+    book.cells[(5, "A")] = "3093024"
+    book.cells[(5, "B")] = date_to_serial(CALL_DATE)
+    book.cells[(5, "C")] = "Вегас Менеджер"
+    book.cells[(5, "F")] = 5
+    scores = dict(SHORT_SCORES)
+    scores["contact"] = 2.5
+    result = write_journal_call(
+        client,
+        project="vegas",
+        call_type="short",
+        client_id="3093024",
+        call_date=CALL_DATE,
+        manager="Вегас Менеджер",
         scores=scores,
-        check_date=date(2026, 9, 2),
-        qa_comment="— Встановлення контакту: 2.5/5 (Відсутній елемент привітання: ім'я клієнта)",
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
     )
-    assert "E" not in payload  # нова колонка після TL
-    assert "J" not in payload  # формула балу
-    assert payload["F"] == 5.0
-    assert "ім'я клієнта" in payload["L"]
-    assert payload["K"] == "АІ"
-    assert sum(v for v in scores.values()) == 30.0
+    assert result["ok"] is False
+    assert result["status"].startswith("Конфлікт · рядок 5")
+    assert "2.5" in result["error"] or "2,5" in result["error"]
+    assert book.updates == []
 
 
-def test_friendly_payload_writes_result_comment_to_ac():
-    from datetime import date
-
-    scores = {
-        "contact": 5.0,
-        "friendly_development": 7.5,
-        "personal_approach": 7.5,
-        "call_to_action": 10.0,
-        "bonus_offer": 5.0,
-        "prep": 10.0,
-        "closing": 5.0,
-        "ease": 7.5,
-    }
-    payload = build_friendly_row_payload(
-        client_id="1",
-        call_date=date(2026, 9, 1),
-        manager="М",
-        tl="Т",
-        scores=scores,
-        check_date=date(2026, 9, 2),
-        qa_comment="— Завершення: 2.5/5 (Відсутній елемент завершення: прощання)",
+def test_10_matching_row_makes_no_write_request():
+    result, book = _write("betking", "short", "4493604", SHORT_SCORES)
+    assert result["ok"] is True
+    book.updates.clear()
+    book.attempts.clear()
+    again = write_journal_call(
+        FakeClient(book),
+        project="betking",
+        call_type="short",
+        client_id="4493604",
+        call_date=CALL_DATE,
+        manager="Головацький Назар",
+        scores=SHORT_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
     )
-    assert "AB" not in payload  # формула
-    assert "прощання" in payload["AD"]
-    assert payload["AC"] == "АІ"
+    assert again["status"].startswith("Вже записано · рядок 3")
+    assert book.updates == []
+    assert book.attempts == []
 
 
-def test_discover_real_betking_headers_maps_slip_not_manager():
-    """Реальні заголовки журналу: «Робота менеджера зі зливом» ≠ manager."""
-    headers = [[
-        "ID клієнта",
-        "Дата дзвінка",
-        "Менеджер VIP",
-        "TL",
-        "Статус від TL",
-        "Встановлення контакту",
-        'Робота менеджера зі "зливом" клієнта',
-        "Робота з негативом/заперення P.R.E.P",
-        "Завершення",
-        "Бал за дзвінок",
-        "Перевіряючий",
-        "Коментар QA",
-        "Дата перевірки",
-        "",
-        "ID клієнта",
-        "Дата дзвінка",
-        "Менеджер VIP",
-        "TL",
-        "Статус від TL",
-        "Встановлення контакту",
-        "Розвиток френдлі",
-        "Індивідуальний підхід",
-        "Заклик до гри",
-        "Пропозиція бонусів",
-        "Робота з негативом/заперення P.R.E.P",
-        "Завершення",
-        "Невимушеність",
-        "Бал за дзвінок",
-        "Перевіряючий",
-        "Коментар QA",
-        "Дата перевірки",
-    ]]
-    mapping = discover_journal_columns(headers)
-    short = mapping["short"]
-    friendly = mapping["friendly"]
-    assert short["manager"] == "C"
-    assert short["tl"] == "D"
-    assert short.get("tl_status") == "E"
-    assert short["contact"] == "F"
-    assert short["slip_handling"] == "G"
-    assert short["total_score"] == "J"
-    assert short["reviewer"] == "K"
-    assert friendly["contact"] == "T"
-    assert friendly["ease"] == "AA"
-    assert friendly["total_score"] == "AB"
-    assert friendly["reviewer"] == "AC"
-    assert mapping["skip"] == {"J", "AB"}
-
-
-def test_parse_protected_data_index():
-    from vip_journal_sheets import _parse_protected_data_index
-
-    err = Exception(
-        "APIError: [400]: Invalid data[12]: You are trying to edit a protected cell"
+def test_11_two_rows_with_the_same_key_are_ambiguous():
+    client, book = _client("betking")
+    for row in (3, 4):
+        book.cells[(row, "A")] = "4493604"
+        book.cells[(row, "B")] = date_to_serial(CALL_DATE)
+        book.cells[(row, "C")] = "Головацький Назар"
+    result = write_journal_call(
+        client,
+        project="betking",
+        call_type="short",
+        client_id="4493604",
+        call_date=CALL_DATE,
+        manager="Головацький Назар",
+        scores=SHORT_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
     )
-    assert _parse_protected_data_index(err) == 12
+    assert result["ok"] is False
+    assert "Неоднозначно" in result["status"]
+    assert "3" in result["status"] and "4" in result["status"]
+    assert book.updates == []
 
 
-def test_find_next_row_ignores_prefilled_below_gap():
-    # рядок 1-2 заголовки, start=3; A3 зайнятий, A4 порожній
-    col = ["", "", "id1", "", "ghost"]
-    assert find_next_journal_row(col, start_row=3) == 4
-
-
-def test_find_next_row_skips_row_with_manager_but_empty_id():
-    # ID порожній, але менеджер уже є — рядок зайнятий (захист від перезапису)
-    ids = ["", "", "", ""]
-    managers = ["", "", "Іваненко", ""]
-    assert find_next_journal_row(ids, start_row=3, extra_cols=[managers]) == 4
-
-
-def test_payload_matches_ignores_date_and_comment_drift():
-    from vip_journal_sheets import _payload_matches, _strict_cols_for_fields
-
-    fields = {
-        "client_id": "'100",
-        "call_date": "10.11.2026",
-        "manager": "Менеджер",
-        "contact": 5.0,
-        "comment": "довгий коментар\nз переносом",
-        "reviewer": "АІ",
-        "check_date": "11.11.2026",
-    }
-    colmap = {
-        "client_id": "A",
-        "call_date": "B",
-        "manager": "C",
-        "contact": "F",
-        "comment": "L",
-        "reviewer": "K",
-        "check_date": "M",
-    }
-    expected = {
-        "A": "'100",
-        "B": "10.11.2026",
-        "C": "Менеджер",
-        "F": 5.0,
-        "L": "довгий коментар\nз переносом",
-        "K": "АІ",
-        "M": "11.11.2026",
-    }
-    actual = {
-        "A": "100",
-        "B": "2026-11-10",
-        "C": "Менеджер",
-        "F": "5",
-        "L": "інший текст",
-        "K": "АІ",
-        "M": "2026-11-11",
-    }
-    strict = _strict_cols_for_fields(fields, colmap)
-    assert strict == {"A", "C", "F"}
-    assert _payload_matches(expected, actual, strict_cols=strict) is True
-
-
-def test_discover_columns_after_tl_insert_for_both_blocks():
-    headers = [[
-        "ID клієнта",
-        "Дата дзвінка",
-        "Менеджер VIP",
-        "TL",
-        "Статус від TL",
-        "Встановлення контакту",
-        'Робота менеджера зі "зливом" клієнта',
-        "P.R.E.P",
-        "Завершення",
-        "Бал за дзвінок",
-        "Перевіряючий",
-        "Коментар QA",
-        "Дата перевірки",
-        "",
-        "ID клієнта",
-        "Дата дзвінка",
-        "Менеджер VIP",
-        "TL",
-        "Статус від TL",
-        "Встановлення контакту",
-        "Розвиток френдлі",
-        "Індивідуальний підхід",
-        "Заклик до гри",
-        "Пропозиція бонусів",
-        "P.R.E.P",
-        "Завершення",
-        "Невимушеність",
-        "Бал за дзвінок",
-        "Перевіряючий",
-        "Коментар QA",
-        "Дата перевірки",
-    ]]
-    mapping = discover_journal_columns(headers)
-    short = mapping["short"]
-    friendly = mapping["friendly"]
-    assert short["client_id"] == "A"
-    assert short["tl"] == "D"
-    assert short["contact"] == "F"
-    assert short["slip_handling"] == "G"
-    assert short["closing"] == "I"
-    assert short["total_score"] == "J"
-    assert short["reviewer"] == "K"
-    assert short["comment"] == "L"
-    assert short["check_date"] == "M"
-    assert short.get("tl_status") == "E"
-    assert friendly["client_id"] == "O"
-    assert friendly["tl"] == "R"
-    assert friendly["contact"] == "T"
-    assert friendly["closing"] == "Z"
-    assert friendly["ease"] == "AA"
-    assert friendly["total_score"] == "AB"
-    assert friendly["reviewer"] == "AC"
-    assert friendly["comment"] == "AD"
-    assert friendly["check_date"] == "AE"
-
-
-def test_manager_lookup_by_project_and_login():
-    managers = parse_journal_managers(
-        [
-            ["Проєкт", "TL", "Менеджер", "Логін"],
-            ["Betking", "Анна", "Іваненко Іван", "ivan"],
-            ["Betking", "Анна", "Петренко Петро", "petro"],
-            ["Vegas", "Олег", "Іваненко Іван", "ivan_vegas"],
-        ]
+def test_12_failed_verification_does_not_use_the_next_row():
+    client, book = _client("betking")
+    book.corrupt_comment = True
+    result = write_journal_call(
+        client,
+        project="betking",
+        call_type="short",
+        client_id="4493604",
+        call_date=CALL_DATE,
+        manager="Головацький Назар",
+        scores=SHORT_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
     )
-    row = resolve_manager_from_directory(
-        managers, project_key="betking", login="ivan", manager_name=""
+    assert result["status"] == "Помилка перевірки"
+    rows = {grid_row for body in book.updates for grid_row in _rows(body)}
+    assert rows == {3}
+    assert 4 not in rows
+
+
+def test_13_rate_limit_retries_the_same_row():
+    client, book = _client("777")
+    book.fail_writes = 1
+    slept = []
+    result = write_journal_call(
+        client,
+        project="777",
+        call_type="short",
+        client_id="4642127",
+        call_date=CALL_DATE,
+        manager="Клименко Артем",
+        scores=SHORT_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=slept.append,
     )
-    assert row["manager"] == "Іваненко Іван"
-    assert row["tl"] == "Анна"
-    with pytest.raises(VipJournalError):
-        resolve_manager_from_directory(managers, project_key="betking", login="missing")
+    assert result["ok"] is True
+    assert result["row"] == 3
+    assert slept == [1]
+    assert len(book.attempts) >= 2
+    assert _rows(book.attempts[0]) == _rows(book.attempts[1]) == {3}
 
 
-def test_analysis_id_stable_for_retry():
-    call = {
-        "url": "https://x",
-        "client_id": "1",
-        "call_date": "01.09.2026",
-        "check_date": "10.11.2026",
-        "ret_manager": "A",
-        "card_id": 1,
-    }
-    a = make_analysis_id(call, "short")
-    b = make_analysis_id(dict(call), "short")
-    assert a == b
-    assert make_analysis_id(call, "friendly") != a
+def test_14_changed_header_writes_nothing():
+    client, book = _client("betking")
+    book.headers["H"] = "Змінено"
+    with pytest.raises(VipJournalError, match="Структура аркуша змінилась"):
+        write_journal_call(
+            client,
+            project="betking",
+            call_type="short",
+            client_id="4493604",
+            call_date=CALL_DATE,
+            manager="Головацький Назар",
+            scores=SHORT_SCORES,
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    message = ""
+    try:
+        write_journal_call(
+            client,
+            project="betking",
+            call_type="short",
+            client_id="4493604",
+            call_date=CALL_DATE,
+            manager="Головацький Назар",
+            scores=SHORT_SCORES,
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    except VipJournalError as exc:
+        message = str(exc)
+    assert "очікувалось P.R.E.P у колонці H" in message
+    assert "Змінено" in message
+    assert book.updates == []
 
 
-def test_analysis_id_differs_for_different_cards():
-    base = {
-        "url": "https://same",
-        "client_id": "1",
-        "call_date": "01.09.2026",
-        "check_date": "10.11.2026",
-        "ret_manager": "A",
-    }
-    a = make_analysis_id({**base, "card_id": 1}, "short")
-    b = make_analysis_id({**base, "card_id": 2}, "short")
-    assert a != b
+def test_15_sheet_777_ranges_are_quoted():
+    result, book = _write("777", "short", "4642127", SHORT_SCORES)
+    assert result["ok"] is True
+    assert book.reads
+    assert all(ref.startswith("'777'!") for ref in book.reads)
+    assert not any(ref.startswith("777!") for ref in book.reads)
+
+
+def test_16_duplicate_or_missing_manager_writes_nothing():
+    client, book = _client("betking")
+    with pytest.raises(VipJournalError, match="Неоднозначний менеджер"):
+        write_journal_call(
+            client,
+            project="betking",
+            call_type="short",
+            client_id="4493604",
+            call_date=CALL_DATE,
+            manager="Подвійний",
+            scores=SHORT_SCORES,
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    with pytest.raises(VipJournalError, match="не знайдено"):
+        write_journal_call(
+            client,
+            project="vegas",
+            call_type="short",
+            client_id="3093024",
+            call_date=CALL_DATE,
+            manager="Немає Такого",
+            scores=SHORT_SCORES,
+            check_date=CHECK_DATE,
+            managers=parse_managers(MANAGERS),
+            supabase=False,
+            sleeper=lambda _seconds: None,
+        )
+    assert book.updates == []
+
+
+def test_audit_flags_the_known_mismatch_and_plans_only_safe_fixes():
+    route = JOURNAL_LAYOUT["projects"]["vegas"]
+    rows = [
+        {
+            "A": "3093024",
+            "B": date_to_serial(CALL_DATE),
+            "C": "Вегас Менеджер",
+            "D": "",
+            "F": 5,
+            "J": "",
+            "L": "контакт 2.5/5",
+        }
+    ]
+    issues = audit_block(
+        sheet_title="Vegas",
+        call_type="short",
+        rows=rows,
+        start_row=route["start_row"],
+        directory=parse_managers(MANAGERS),
+        project_key="vegas",
+    )
+    kinds = {item["issue"] for item in issues}
+    assert "порожній TL" in kinds
+    assert "коментар містить N/M" in kinds
+    assert "бал у клітинці не збігається з коментарем" in kinds
+    plans = plan_safe_fixes(
+        sheet_title="Vegas",
+        call_type="short",
+        rows=rows,
+        start_row=route["start_row"],
+        directory=parse_managers(MANAGERS),
+        project_key="vegas",
+        sheet_id=route["sheet_id"],
+    )
+    assert [plan["letter"] for plan in plans] == ["D"]
+    assert plans[0]["value"] == "Олег"
+    matching = [dict(rows[0]), {"A": "1", "C": "Вегас Менеджер", "D": "Олег", "F": 2.5, "L": "контакт 2.5/5", "J": "=SUM(F6:I6)"}]
+    safe = plan_safe_fixes(
+        sheet_title="Vegas",
+        call_type="short",
+        rows=matching,
+        start_row=6,
+        directory=parse_managers(MANAGERS),
+        project_key="vegas",
+        sheet_id=route["sheet_id"],
+    )
+    comments = [plan for plan in safe if plan["letter"] == "L"]
+    assert comments and comments[0]["value"] == "контакт 2,5 із 5"
+
+
+def _rows(body: dict) -> set[int]:
+    return {request["updateCells"]["range"]["startRowIndex"] + 1 for request in body.get("requests") or []}
