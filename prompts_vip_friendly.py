@@ -54,7 +54,24 @@ def get_vip_friendly_analysis_prompt(
 
 СХЕМА JSON:
 {{
-  "contact": {{ ...як у короткому: greeted, used_client_name, named_project, availability_*, exception_* }},
+  "contact": {{
+    "greeted": bool,
+    "used_client_name": bool,
+    "named_project": bool,
+    "availability_check_relevant": bool,
+    "availability_check_done": bool,
+    "greeting_quote": str,
+    "client_name_quote": str,
+    "project_quote": str,
+    "availability_quote": str,
+    "manager_name_quote": str,
+    "exception_number_signed": bool,
+    "exception_prior_messenger_contact": bool,
+    "exception_client_recognized_manager": bool,
+    "exception_client_interrupted_intro": bool,
+    "exception_answered_question_then_finished_intro": bool,
+    "evidence": []
+  }},
   "friendly_development": {{
     "asked_relevant_personal_questions": bool,
     "followed_up_on_client_answer": bool,
@@ -107,6 +124,19 @@ def get_vip_friendly_analysis_prompt(
     "client_didnt_allow_finish_thought": bool
   }}
 }}
+
+contact:
+- greeted — будь-яке привітання: "Добрий день", "Вітаю", "Алло, добрий день", "Доброго дня".
+- used_client_name — звернувся на ім'я або уточнив "Це <ім'я>?".
+- named_project — назвав 777, Betking або Vegas.
+- availability_check_relevant — завжди true, крім винятків Д4 і Д5. Д11: перевірка зручності обов'язкова.
+- availability_check_done — було питання "Вам зручно говорити?", "Є хвилинка?", "Є час?".
+- greeting_quote, client_name_quote, project_quote, availability_quote, manager_name_quote — дослівна цитата з таймкодом. Немає елемента — порожній рядок, не вигадуй.
+- exception_number_signed — у "Важливому", коментарі QA або чекбоксі сказано, що номер підписаний / підписав / клієнт бачить, хто дзвонить.
+- exception_prior_messenger_contact — у коментарі до дзвінка або у "Важливому" є месенджер (Viber, Telegram, WhatsApp). Тоді коротке представлення лише на ім'я — повний бал контакту, назва проєкту не обов'язкова. Став true.
+- exception_client_recognized_manager — клієнт сам назвав менеджера на ім'я або сказав "а, це ви".
+- exception_client_interrupted_intro — клієнт перебив представлення.
+- exception_answered_question_then_finished_intro — менеджер відповів на питання і далі договорив представлення.
 
 ВІЙСЬКОВИЙ (клієнт ЗСУ, картка або коментар):
 - P.R.E.P.: "немає коштів" і "немає часу" не опрацьовуються. Не включай їх в objections. Інших заперечень немає — objections_present=false.
