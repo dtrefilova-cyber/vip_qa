@@ -32,6 +32,7 @@ from constants import (
     resolve_call_type_key,
 )
 from google_sheets import clean_sheet_cell
+from vip_calibration_export import select_log_for_journal_row
 
 logger = logging.getLogger(__name__)
 
@@ -699,7 +700,7 @@ def _score_conflict(call_type: str, letter: str) -> bool:
     return letter in set(block_layout(call_type)["score_letters"])
 
 
-def _plan_existing(row: dict[str, Any], call_type: str, desired: dict[str, dict[str, Any]], row_number: int) -> tuple[str, dict[str, dict[str, Any]], str]:
+def _plan_existing(row: dict[str, Any], call_type: str, desired: dict[str, dict[str, Any]], row_number: int) -> tuple[str, dict[str, dict[str, Any]], str, list[str]]:
     conflicts = []
     pending: dict[str, dict[str, Any]] = {}
     for letter, cell in desired.items():
@@ -712,16 +713,21 @@ def _plan_existing(row: dict[str, Any], call_type: str, desired: dict[str, dict[
         if _score_conflict(call_type, letter):
             conflicts.append((letter, actual, cell["value"]))
         # Заповнену не-балову клітинку не перезаписуємо: це може бути ручна правка.
-    if conflicts:
+    skipped = [letter for letter, _actual, _wanted in conflicts]
+    if conflicts and not pending:
         letter, actual, wanted = conflicts[0]
         return (
             "conflict",
             {},
             f"Конфлікт: у рядку {row_number} вже стоїть {actual}, аналіз дав {wanted}.",
+            skipped,
         )
     if not pending:
-        return "same", {}, ""
-    return "fill", pending, ""
+        return "same", {}, "", []
+    detail = ""
+    if skipped:
+        detail = "Не перезаписано розбіжний бал: " + ", ".join(skipped) + "."
+    return "fill", pending, detail, skipped
 
 
 def _missing_score_names(call_type: str, scores: dict[str, float | None]) -> list[str]:
@@ -872,17 +878,21 @@ def _remember(record: dict, supabase=None) -> None:
         logger.warning("Запис результату в Supabase не вдався", exc_info=True)
 
 
+def _prior_score_response(supabase, client_id: str):
+    columns = "id,client_id,call_date,ret_manager,project,call_type,criteria_scores,verdict,created_at,row_ref"
+    try:
+        return supabase.table("vip_short_call_logs").select(columns).eq("client_id", client_id).limit(30).execute()
+    except Exception:
+        logger.debug("Журнал логів без row_ref, повтор без цієї колонки", exc_info=True)
+        fallback = columns.replace(",row_ref", "")
+        return supabase.table("vip_short_call_logs").select(fallback).eq("client_id", client_id).limit(30).execute()
+
+
 def _load_prior_scores(supabase, *, project: str, call_type: str, client_id: str, call_date: date, manager: str) -> list[dict]:
     if supabase is None:
         return []
     try:
-        response = (
-            supabase.table("vip_short_call_logs")
-            .select("client_id,call_date,ret_manager,project,call_type,criteria_scores,verdict")
-            .eq("client_id", client_id)
-            .limit(30)
-            .execute()
-        )
+        response = _prior_score_response(supabase, client_id)
     except Exception:
         logger.warning("Перевірка інших аналізів у Supabase не вдалась", exc_info=True)
         return []
@@ -1005,16 +1015,6 @@ def write_journal_call(
             call_date=parsed_call,
             manager=directory["manager"],
         )
-    for earlier in prior:
-        earlier_scores = _scores_from_criteria(call_type, earlier.get("criteria_scores") or earlier.get("criteria") or [])
-        if _scores_conflict(checked, earlier_scores):
-            return _result(
-                False,
-                "Два аналізи розходяться",
-                route=route,
-                error="Два аналізи дають різні бали",
-                extra={"scores": checked, "other_scores": earlier_scores},
-            )
 
     lock = _process_lock(route["sheet_id"], call_type)
     with lock:
@@ -1036,12 +1036,42 @@ def write_journal_call(
                 sleep,
                 supabase,
                 owner,
+                prior,
+                parsed_check,
             )
         finally:
             _release_remote_lock(supabase, route["sheet_id"], call_type, owner)
 
 
-def _write_locked(book, route, call_type, client, call_date, directory, scores, desired, missing, comment, account, dry_run, sleep, supabase, owner) -> dict:
+def _matched_prior_scores(call_type, scores, prior, *, client_id, call_date, manager, analysis_time, row):
+    """Інша розмова того самого client_id не блокує запис. Порівнюємо лише підібраний лог."""
+    if not prior:
+        return None
+    matched = select_log_for_journal_row(
+        {
+            "client_id": client_id,
+            "call_date": call_date,
+            "manager": manager,
+            "analysis_time": analysis_time,
+            "row": row,
+            "call_type": call_type,
+        },
+        prior,
+    )
+    if not matched:
+        return None
+    raw = matched.get("criteria_scores") or matched.get("criteria") or []
+    if not raw:
+        return None
+    earlier = _scores_from_criteria(call_type, raw)
+    if not any(value is not None for value in earlier.values()):
+        return None
+    if _scores_conflict(scores, earlier):
+        return earlier
+    return None
+
+
+def _write_locked(book, route, call_type, client, call_date, directory, scores, desired, missing, comment, account, dry_run, sleep, supabase, owner, prior, analysis_time) -> dict:
     headers, block_rows = _read_headers_and_block(book, route, call_type)
     _check_headers(headers, call_type)
     matches = _find_rows(block_rows, route, call_type, client, call_date, directory["manager"])
@@ -1053,7 +1083,31 @@ def _write_locked(book, route, call_type, client, call_date, directory, scores, 
     if len(matches) == 1:
         row_number = matches[0]
         current = block_rows[row_number - route["start_row"]]
-        action, pending, detail = _plan_existing(current, call_type, desired, row_number)
+    else:
+        row_number = _free_row(block_rows, route, call_type)
+        current = None
+    other_scores = _matched_prior_scores(
+        call_type,
+        scores,
+        prior,
+        client_id=client,
+        call_date=call_date,
+        manager=directory["manager"],
+        analysis_time=analysis_time,
+        row=row_number,
+    )
+    if other_scores is not None:
+        _remember(_log_record(route, call_type, client, call_date, directory, "Два аналізи розходяться", row_number, desired, current or {}, owner), supabase)
+        return _result(
+            False,
+            "Два аналізи розходяться",
+            route=route,
+            row=row_number,
+            error="Два аналізи дають різні бали",
+            extra={"scores": scores, "other_scores": other_scores},
+        )
+    if current is not None:
+        action, pending, detail, skipped = _plan_existing(current, call_type, desired, row_number)
         if action == "conflict":
             _remember(_log_record(route, call_type, client, call_date, directory, "Конфлікт", row_number, desired, current, owner), supabase)
             return _result(False, f"Конфлікт · рядок {row_number}", route=route, row=row_number, error=detail)
@@ -1064,9 +1118,10 @@ def _write_locked(book, route, call_type, client, call_date, directory, scores, 
         to_write = pending
         kind = "filled"
     else:
-        row_number = _free_row(block_rows, route, call_type)
         to_write = desired
         kind = "created"
+        detail = ""
+        skipped = []
 
     plan = [{"letter": letter, "value": cell["value"], "kind": cell["kind"]} for letter, cell in to_write.items()]
     if dry_run:
@@ -1094,14 +1149,17 @@ def _write_locked(book, route, call_type, client, call_date, directory, scores, 
     actual, formula = _read_written_row(book, route, call_type, row_number)
     formula = _ensure_formula(book, route, call_type, row_number, formula, dry_run=False)
     actual, formula = _read_written_row(book, route, call_type, row_number)
-    problems = _verify(actual, formula, call_type, desired, row_number)
+    expected = {letter: cell for letter, cell in desired.items() if letter not in set(skipped)}
+    problems = _verify(actual, formula, call_type, expected, row_number)
     if problems:
         message = "Помилка перевірки: " + "; ".join(problems)
         _remember(_log_record(route, call_type, client, call_date, directory, message, row_number, desired, actual, owner), supabase)
         return _result(False, "Помилка перевірки", route=route, row=row_number, error=message)
     status = _status_text(kind, route, row_number, missing)
+    if detail and kind in {"created", "filled"}:
+        status = f"{status}. {detail}"
     _remember(_log_record(route, call_type, client, call_date, directory, status, row_number, desired, actual, owner), supabase)
-    return _result(True, status, route=route, row=row_number, extra={"written": plan, "comment": comment})
+    return _result(True, status, route=route, row=row_number, extra={"written": plan, "comment": comment, "skipped_scores": skipped})
 
 
 def _send_with_retry(book, route, call_type, requests, row_number, client, call_date, manager, desired, sleep, account: str) -> None:
@@ -1120,7 +1178,7 @@ def _send_with_retry(book, route, call_type, requests, row_number, client, call_
             _, rows = _read_headers_and_block(book, route, call_type)
             current = rows[row_number - route["start_row"]] if row_number - route["start_row"] < len(rows) else {}
             if _key_matches(current, call_type, client, call_date, manager):
-                action, _pending, _detail = _plan_existing(current, call_type, desired, row_number)
+                action, _pending, _detail, _skipped = _plan_existing(current, call_type, desired, row_number)
                 if action == "same":
                     return
 

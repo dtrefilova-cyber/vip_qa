@@ -364,6 +364,32 @@ def test_08_seven_and_half_is_not_allowed_in_call_to_action():
 
 
 def test_09_existing_score_conflict_writes_nothing():
+    result, book = _write("vegas", "short", "3093024", SHORT_SCORES)
+    assert result["ok"] is True
+    book.updates.clear()
+    scores = dict(SHORT_SCORES)
+    scores["contact"] = 2.5
+    again = write_journal_call(
+        FakeClient(book),
+        project="vegas",
+        call_type="short",
+        client_id="3093024",
+        call_date=CALL_DATE,
+        manager="Вегас Менеджер",
+        scores=scores,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
+    )
+    assert again["ok"] is False
+    assert again["status"].startswith("Конфлікт · рядок 5")
+    assert "2.5" in again["error"] or "2,5" in again["error"]
+    assert book.updates == []
+    assert book.cells[(5, "F")] == 5
+
+
+def test_09b_empty_scores_are_stored_when_one_score_disagrees():
     client, book = _client("vegas")
     book.cells[(5, "A")] = "3093024"
     book.cells[(5, "B")] = date_to_serial(CALL_DATE)
@@ -384,10 +410,15 @@ def test_09_existing_score_conflict_writes_nothing():
         supabase=False,
         sleeper=lambda _seconds: None,
     )
-    assert result["ok"] is False
-    assert result["status"].startswith("Конфлікт · рядок 5")
-    assert "2.5" in result["error"] or "2,5" in result["error"]
-    assert book.updates == []
+    assert result["ok"] is True
+    assert result["status"].startswith("Дописано · рядок 5")
+    assert "F" in result["status"]
+    letters = {letter for _row, letter, _value in _entered(book)}
+    assert "F" not in letters
+    assert {"G", "H", "I"} <= letters
+    assert "E" not in letters
+    assert book.cells[(5, "F")] == 5
+    assert book.cells[(5, "G")] == 10
 
 
 def test_10_matching_row_makes_no_write_request():
@@ -616,3 +647,90 @@ def test_audit_flags_the_known_mismatch_and_plans_only_safe_fixes():
 
 def _rows(body: dict) -> set[int]:
     return {request["updateCells"]["range"]["startRowIndex"] + 1 for request in body.get("requests") or []}
+
+
+def test_friendly_scores_land_in_o_ae_and_skip_s_ab():
+    for project, row in (("777", 3), ("betking", 3), ("vegas", 5)):
+        result, book = _write(project, "friendly", "7340116", FRIENDLY_SCORES)
+        assert result["ok"] is True
+        assert result["row"] == row
+        letters = {letter for _row, letter, _value in _entered(book)}
+        assert {"O", "T", "U", "V", "W", "X", "Y", "Z", "AA", "AE"} <= letters
+        assert "S" not in letters
+        ab = [value for _row, letter, value in _entered(book) if letter == "AB"]
+        assert ab == [{"formulaValue": f"=SUM(T{row}:AA{row})"}]
+        assert book.cells[(row, "T")] == 5
+        assert book.cells[(row, "W")] == 10
+        assert book.cells[(row, "AA")] == 2.5
+
+
+def test_friendly_keeps_a_disagreeing_score_and_fills_the_rest():
+    client, book = _client("777")
+    book.cells[(3, "O")] = "7340116"
+    book.cells[(3, "P")] = date_to_serial(CALL_DATE)
+    book.cells[(3, "Q")] = "Клименко Артем"
+    book.cells[(3, "U")] = 5
+    result = write_journal_call(
+        client,
+        project="777",
+        call_type="friendly",
+        client_id="7340116",
+        call_date=CALL_DATE,
+        manager="Клименко Артем",
+        scores=FRIENDLY_SCORES,
+        check_date=CHECK_DATE,
+        managers=parse_managers(MANAGERS),
+        supabase=False,
+        sleeper=lambda _seconds: None,
+    )
+    assert result["ok"] is True
+    letters = {letter for _row, letter, _value in _entered(book)}
+    assert "U" not in letters
+    assert "S" not in letters
+    assert {"T", "V", "W", "X", "Y", "Z", "AA"} <= letters
+    assert book.cells[(3, "U")] == 5
+    assert book.cells[(3, "T")] == 5
+    ab = [value for _row, letter, value in _entered(book) if letter == "AB"]
+    assert all("formulaValue" in value for value in ab)
+
+
+def test_other_conversation_for_same_client_does_not_block_the_write():
+    same = {
+        "id": "98970b39-1111-4111-8111-111111111111",
+        "client_id": "4493604",
+        "call_date": CALL_DATE.isoformat(),
+        "ret_manager": "Головацький Назар",
+        "call_type": "short",
+        "created_at": "2026-11-18T12:00:00+00:00",
+        "row_ref": "3",
+        "criteria_scores": [
+            {"key": key, "points": value} for key, value in SHORT_SCORES.items()
+        ],
+        "gpt_transcript": "Клієнт: Юрій",
+    }
+    other = {
+        "id": "71ff5601-2222-4222-8222-222222222222",
+        "client_id": "4493604",
+        "call_date": CALL_DATE.isoformat(),
+        "ret_manager": "Головацький Назар",
+        "call_type": "short",
+        "created_at": "2026-11-18T08:00:00+00:00",
+        "row_ref": "40",
+        "criteria_scores": [
+            {"key": "contact", "points": 0},
+            {"key": "slip_handling", "points": 0},
+            {"key": "prep", "points": 0},
+            {"key": "closing", "points": 0},
+        ],
+        "gpt_transcript": "Клієнт: Віталій",
+    }
+    result, book = _write(
+        "betking",
+        "short",
+        "4493604",
+        SHORT_SCORES,
+        prior_analyses=[other, same],
+    )
+    assert result["ok"] is True
+    assert result["status"] != "Два аналізи розходяться"
+    assert book.cells[(3, "F")] == 5
