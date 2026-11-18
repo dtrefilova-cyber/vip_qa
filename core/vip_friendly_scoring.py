@@ -682,10 +682,6 @@ def ground_closing(closing: dict, dialogue: str) -> dict:
     data["said_goodbye"] = _in_tail(
         dialogue, str(data.get("said_goodbye_quote") or ""), _MANAGER_SPEAKERS
     )
-    thanked = str(data.get("thanked_quote") or "")
-    data["thanked_and_left_contact_open"] = _in_tail(dialogue, thanked, _MANAGER_SPEAKERS) and bool(
-        re.search(r"дяк|зв|пиш|зверта|береж", thanked, re.IGNORECASE)
-    )
     data["client_ended_verified"] = _in_tail(
         dialogue, str(data.get("client_ended_quote") or ""), _CLIENT_SPEAKERS
     )
@@ -724,7 +720,6 @@ def score_quoted_closing(f: ClosingFacts) -> CriterionScore:
     element_labels = [
         (f.asked_if_more_questions, "питання «чи є ще питання»"),
         (f.said_goodbye, "прощання"),
-        (f.thanked_and_left_contact_open, "подяка з відкритим контактом"),
     ]
     missing_labels = [label for ok, label in element_labels if not ok]
     if not missing_labels:
