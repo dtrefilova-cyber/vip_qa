@@ -1,0 +1,1160 @@
+[
+ {
+  "client_id": "7738120",
+  "call_type": "vip_friendly",
+  "project": "777",
+  "tl": "Крисак Іван",
+  "tl_comment": "7738120 - “Пропозиція бонусів” и “Завершення” все ок",
+  "disputed_criteria": "Пропозиція бонусів; Завершення",
+  "reason": "TL: «Пропозиція бонусів» і «Завершення» все ок",
+  "stored_scores": {
+   "contact": 5.0,
+   "friendly_development": 7.5,
+   "personal_approach": 5.0,
+   "call_to_action": 0.0,
+   "bonus_offer": 0.0,
+   "prep": 10.0,
+   "closing": 2.5,
+   "ease": 7.5
+  },
+  "stored_total": 37.5,
+  "expected_scores": {
+   "bonus_offer": 5.0,
+   "closing": 5.0
+  },
+  "expected_total": null,
+  "expected_critical": false,
+  "qa_comment": "не структура/ все добре, трошки дощило, грати буде, бонус SP_VIP деп 800₴ (40FS по 2₴) - Pure Ecstasy-Патіплей , бд 1000",
+  "call": {
+   "tl": "Крисак Іван",
+   "card_id": 4,
+   "project": "777",
+   "call_date": "02.11.2026",
+   "client_id": "7738120",
+   "check_date": "11.11.2026",
+   "qa_manager": "Олексій",
+   "analysis_id": "45f6dccb891c3b1af0e64434c2f7c424",
+   "ret_manager": "Войтер Тетяна",
+   "bonus_status": "Бонус нараховано вірно",
+   "manager_login": "tvoy",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "VIP Friendly (2-й дзвінок)",
+   "has_tl_permission": false,
+   "journal_call_type": "friendly",
+   "client_is_military": true,
+   "betking_x2_applicable": false,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "ease": {
+    "level": "high",
+    "signals": [
+     "живий діалог із питаннями про стан, роботу/службу та погоду",
+     "є реакція на відповіді клієнта і підтримка щодо служби",
+     "персоналізована розмова без тиску, з м'яким переходом до бонусу"
+    ]
+   },
+   "prep": {
+    "objections": [],
+    "tech_followup": false,
+    "objections_present": false
+   },
+   "closing": {
+    "evidence": [],
+    "d14_quote": "",
+    "quote_mode": true,
+    "said_goodbye": false,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "Будемо тоді на зв'язку. Бажаю вам даного дня. Тихої ночі. Так. До побачення. До побачення.",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "У вас питання є до мене?",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [],
+    "named_project": true,
+    "project_quote": "[0:04] Це Таня сайту 777, а ваш AIP менеджер.",
+    "greeting_quote": "[0:04] Андрій, доброго вечора вам.",
+    "used_client_name": true,
+    "client_name_quote": "[0:04] Андрій, доброго вечора вам.",
+    "availability_quote": "",
+    "manager_name_quote": "[0:04] Це Таня сайту 777, а ваш AIP менеджер.",
+    "availability_check_done": false,
+    "exception_number_signed": false,
+    "manager_introduced_self": true,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": false,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "bonus_offer": {
+    "x2_quote": "",
+    "terms_stated": {
+     "wager": "Максимальна сума з FS до 125 з вейджером X1",
+     "validity": "чекає 48 годин в розділі бонуси події",
+     "min_deposit": "Там депозит 800 гривень",
+     "fs_count_and_bet": "40 обертів, ставочка по 2 гривні"
+    },
+    "devalue_quote": "",
+    "benefits_quote": "То не забудьте активувати, якраз пропуйте нову гру для себе.",
+    "bonus_devalued": false,
+    "all_terms_stated": true,
+    "benefits_explained": true,
+    "betking_x2_applicable": false,
+    "first_deposit_bonus_time": "",
+    "first_deposit_bonus_quote": "",
+    "betking_x2_booster_offered": false,
+    "deposit_bonus_offered_first": false,
+    "first_no_deposit_bonus_time": "",
+    "no_deposit_bonus_applicable": false,
+    "first_no_deposit_bonus_quote": "",
+    "no_deposit_bonus_offered_after": false
+   },
+   "call_to_action": {
+    "first_answer": "",
+    "invite_quote": "",
+    "second_answer": "",
+    "open_reason_time": "",
+    "first_answer_time": "",
+    "open_reason_quote": "",
+    "client_is_military": true,
+    "first_answer_quote": "",
+    "second_answer_time": "",
+    "asked_deposit_today": false,
+    "second_answer_quote": "",
+    "deposit_question_time": "",
+    "first_answer_positive": false,
+    "asked_deposit_tomorrow": false,
+    "deposit_question_quote": "",
+    "first_bonus_offer_time": "1:10",
+    "manager_play_questions": [],
+    "second_answer_positive": false,
+    "tomorrow_question_time": "",
+    "first_bonus_offer_quote": "на Pure Extedy включити спіни. Там депозит 800 гривень, 40 обертів, ставочка по 2 гривні.",
+    "tomorrow_question_quote": "",
+    "client_declared_deposit_time": "",
+    "asked_open_reason_if_declined": false,
+    "client_declared_deposit_quote": "",
+    "client_declared_deposit_today": false,
+    "invited_to_play_when_possible": false,
+    "started_with_bonus_before_deposit_intent": false
+   },
+   "shared_context": {
+    "evidence": [],
+    "moved_to_messenger": false,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   },
+   "personal_approach": {
+    "guide_level": "7.5",
+    "bonuses_only": false,
+    "signal_quotes": [
+     "«пам'ятаєте, вам розповідала, що на сайті включили спіни до різних провайдерів.»",
+     "«Я вам хотіла на Patyplay, на Pure Extedy включити спіни.»",
+     "«Там депозит 800 гривень, 40 обертів, ставочка по 2 гривні.»",
+     "«І компліментиком на тисячу, на 24 години вам включу.»"
+    ],
+    "tech_followup": false,
+    "adapted_communication_style": false,
+    "used_prior_interaction_info": false,
+    "reacted_to_shared_personal_info": false,
+    "maintained_positive_contact_without_immediate_action": false
+   },
+   "friendly_development": {
+    "guide_level": "7.5",
+    "signal_quotes": [
+     "«Так ви, а ви спочатку розкажіть, як ви, бо давно з вами не говорили.»",
+     "«Чи у вас нового?»",
+     "«Але я надіюсь, що у вас там зараз все безпечно відносно. Ви ходите в укриття і бережете себе.»",
+     "«А до речі, як у вас там з погодою, не за дощило?»",
+     "«Тому так от такі от справи.»"
+    ],
+    "mechanical_only": false,
+    "followed_up_on_client_answer": false,
+    "returned_to_personal_info_later": false,
+    "supported_client_initiated_topic": false,
+    "asked_relevant_personal_questions": false
+   }
+  },
+  "gpt_transcript": "Клієнт: Да.  \nМенеджер: Андрій, доброго вечора вам. Це Таня сайту 777, а ваш AIP менеджер. На хвилиночку сюрпризиком до вас.  \nКлієнт: Доброго. Да, да, я почу...  \nМенеджер: Добре. Ой, дуже два класних якраз на вечір, бо що ви пограли, відпочили.  \nКлієнт: розповідайте.  \nМенеджер: Так ви, а ви спочатку розкажіть, як ви, бо давно з вами не говорили. Чи у вас нового?  \nКлієнт: Нічого не змінилося, нічого не змінилося.  \nМенеджер: Нічого.  \nКлієнт: Да,  \nМенеджер: На...  \nКлієнт: робота,  \nМенеджер: Угу.  \nКлієнт: служба.  \nМенеджер: Але я надіюсь, що у вас там зараз все безпечно відносно. Ви ходите в укриття і бережете себе.  \nКлієнт: Да, нормально. Зараз стабільно.  \nМенеджер: Це стабільно. Ви бережіть себе обов'язково. Добре?  \nКлієнт: Добре, я почую, я теж.  \nМенеджер: Так. А до речі, як у вас там з погодою, не за дощило?  \nКлієнт: Трошечки щось капало, ага.  \nМенеджер: Трошечки. Так. Ну, а саме з наступного тижня обіцяють дощі, тому вже ноги тримайте в теплі, щоб не хворіли, бо все починається з ніг та з хворого горла.  \nКлієнт: Да, угу.  \nМенеджер: Тому так от такі от справи. До речі, нам же ж, пам'ятаєте, вам розповідала, що на сайті включили спіни до різних провайдерів. Так? Я вам хотіла на Partyplay,  \nКлієнт: Так, так.  \nМенеджер: на Pure Extedy включити спіни. Там депозит 800 гривень, 40 обертів, ставочка по 2 гривні. Максимальна сума з FS до 125 з вейджером X1 і чекає 48 годин в розділі бонуси події. Так? Так. То не забудьте активувати, якраз пропуйте нову гру для себе. І трошки відійдете від сонця Єгипта,  \nКлієнт: Да. Ага.  \nМенеджер: бо скоро реально будемо, знаєте, як в інопланетян, друге, третє сонечко.  \nКлієнт: Я говорю.  \nМенеджер: І компліментик на 1000, на 24 години вам включу. Пограйте відпочинку. Добре? У вас питання є до мене?  \nКлієнт: Все, з тобою. Да ні,  \nМенеджер: Так. Нема? Добре. Будемо тоді на зв'язку. Бажаю вам даного дня. Тихої ночі. Так. До побачення. До побачення.  \nКлієнт: Ага. Да, його називаєм, потрапить.",
+  "deepgram_transcript": "ch_1: Да.\nch_0: Андрій, доброго вечора вам. Це Таня сайта 777, а ваш AIP менеджер. На хвилиночку сюрпризиком до вас.\nch_1: Доброго. Да, да, я почу...\nch_0: Добре. Ой, дуже два класних якраз на вечір,\nch_0: бо що ви пограли, відпочили.\nch_1: рассказывайте.\nch_0: У. Так ви, а ви спочатку розкажіть, як ви, бо давно з вами не говорили.\nch_1: Ага.\nch_0: Чи у вас нового?\nch_1: Ничего не изменилось, ничего не изменилось.\nch_0: Нічого.\nch_1: Да,\nch_0: На...\nch_1: работа,\nch_0: Угу.\nch_1: служба.\nch_0: Але я надіюсь, що у вас там зараз все безпечно відносно. Ви ходите в укриття і бережете себе.\nch_1: Да, нормально. Сейчас стабильно.\nch_0: Це стабільно. Ви бережіть себе обов'язково. Добре?\nch_1: Доброе, я почугу, я тоже.\nch_0: Так. А до речі, як у вас там з погодою не за дощило?\nch_1: Крошечко что-то капала, ага.\nch_0: Трошечки. Так. Ну, а саме з наступного тижня обіцяють дощі, тому вже ноги тримайте в теплі, щоб не хворіли, бо все починається з їх та з хворого нога, горла.\nch_1: Да, угу.\nch_0: Тому так от такі от справи.\nch_0: До речі, нам же ж, пам'ятаєте, вам розповідала, що на сайті включили спіни до різних провайдерів. Так?\nch_0: Я вам хотіла на Patyplay,\nch_1: Так, так.\nch_0: на Pure Extedy включити спіни. Там депозит 800 гривень, сорок обертів, ставочка по дві гривні. Максимальна сума з FS до ста двадцяти п'яти з вежюлем X1 і чекає сорок вісім годин в розділі бонуси події. Так? Так.\nch_0: То не забудьте активувати, якраз пропуйте нову гру для себе. І трошки відійдете від сонце Єгипта,\nch_1: Да. Ага.\nch_0: бо скоро реально будемо, знаєте, як в інопланетян,\nch_0: друге, третє сонечко.\nch_1: Я говорю.\nch_0: І компліментик на тисячу, на двадцять чотири години вам включу.\nch_0: Пограйте відпочинку. Добре? У вас питання є до мене?\nch_1: Все, с тобой. Да нет,\nch_0: Так. Нема? Добре. Будемо тоді на зв'язочку. Бажаю вам даного дня. Тихої ночі. Так. До побачення. До побачення.\nch_1: Ага. Да, его называем, попасть."
+ },
+ {
+  "client_id": "9531962",
+  "call_type": "vip_short_90s",
+  "project": "Betking",
+  "tl": "Мальцева Єлизавета",
+  "tl_comment": "Привет, 9531962 тут не было слива игрока, он просто в начале сказал минутку не больше и общался с менеджером.\n+ когда оборвалась связь - был перезвон от менеджера",
+  "disputed_criteria": "Робота менеджера зі \"зливом\" клієнта; Завершення",
+  "reason": "Зливу не було: «хвилинку, не більше» = згода; ASR перекладав клієнта англійською",
+  "stored_scores": {
+   "contact": 5.0,
+   "slip_handling": 2.5,
+   "prep": 10.0,
+   "closing": 5.0
+  },
+  "stored_total": 22.5,
+  "expected_scores": {
+   "slip_handling": 10.0,
+   "closing": 5.0
+  },
+  "expected_total": 30.0,
+  "expected_critical": false,
+  "qa_comment": "но + тг: ВИ бачите мої повідомлення? \\ Вб: наберіть , мав мало часу гра норм, був прихворів зараз -+ нормально почуває себе , бустер , на нетгейм SP_VIP деп 700₴ ( 40FS по 3₴) - Almighty Joker: Big Bang",
+  "call": {
+   "tl": "Мальцева Єлизавета",
+   "card_id": 2,
+   "project": "betking",
+   "call_date": "12.11.2026",
+   "client_id": "9531962",
+   "card_title": "Дзвінок #0002",
+   "check_date": "13.11.2026",
+   "qa_manager": "Діана Батрак",
+   "card_number": 2,
+   "ret_manager": "Звенігородська Наталія",
+   "bonus_status": "Бонус нараховано вірно",
+   "duration_sec": 100.22394,
+   "manager_dept": "VIP",
+   "call_date_iso": "2026-11-12",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 30–120 с",
+   "channels_count": 2,
+   "manager_speaker": "",
+   "_call_date_input": "2026-11-12",
+   "has_tl_permission": false,
+   "client_is_military": true,
+   "betking_x2_applicable": true,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "prep": {
+    "objections": [
+     {
+      "type": "no_time",
+      "quote": "[0:12] Клієнт: Talk to later.",
+      "handling": "formal",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     },
+     {
+      "type": "no_time",
+      "quote": "[0:47] Клієнт: No.",
+      "handling": "formal",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     },
+     {
+      "type": "no_time",
+      "quote": "[0:49] Клієнт: No. No.",
+      "handling": "formal",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     },
+     {
+      "type": "no_time",
+      "quote": "[1:06] Клієнт: No. No.",
+      "handling": "formal",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     }
+    ],
+    "tech_followup": false,
+    "objections_present": true
+   },
+   "closing": {
+    "evidence": [],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": false,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [
+     "[0:04] Менеджер: О, Юрій, добрий вечір.",
+     "[0:07] Менеджер: Добре. Це Наталія, ваш менеджер по роботі зі клієнтами. Сайту Betking. Маєте хвилинку?",
+     "[0:12] Клієнт: Talk to later.",
+     "Коментар QA: но + тг: ВИ бачите мої повідомлення? ...",
+     "Важливе / попередній контакт: 01,09,25- вб + тг сг - вайбер ..."
+    ],
+    "named_project": true,
+    "project_quote": "Це Наталія, ваш менеджер по роботі зі клієнтами. Сайту Betking.",
+    "greeting_quote": "О, Юрій, добрий вечір.",
+    "used_client_name": true,
+    "client_name_quote": "О, Юрій, добрий вечір.",
+    "availability_quote": "Маєте хвилинку?",
+    "manager_name_quote": "Це Наталія, ваш менеджер по роботі зі клієнтами.",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": true,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": true,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [
+     "[0:12] Клієнт: Talk to later."
+    ],
+    "proposed_callback": false,
+    "reason_stated_by_client": false,
+    "specified_concrete_time": false,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": false,
+    "client_attempted_to_end_call": true,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": true,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": false
+   },
+   "shared_context": {
+    "evidence": [
+     "Коментар QA: но + тг: ВИ бачите мої повідомлення?",
+     "Важливе / попередній контакт: 01,09,25- вб + тг сг - вайбер ..."
+    ],
+    "moved_to_messenger": true,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Клієнт: [0:03] Hello?  \nМенеджер: [0:04] О, Юрій, добрий вечір.  \nКлієнт: [0:06] Hello, man.  \nМенеджер: [0:07] Добре. Це Наталія, ваш менеджер по роботі зі клієнтами. Сайту Betking. Маєте хвилинку?  \nКлієнт: [0:12] [низька якість розпізнавання] Talk to later.  \nМенеджер: [0:12] Добре.  \nМенеджер: [0:15] Я дуже рада вас чути. Як справи ваші?  \nМенеджер: [0:19] Давно не можу до вас додзвонитися.  \nМенеджер: [0:21] Вже місяць, навіть більше не можу додзвонитися. Добре у вас?  \nМенеджер: [0:27] Ваші ж бонуси згорають, на жаль, коли не активовуються вчасно.  \nМенеджер: [0:32] Тому, будь ласка, по можливості  \nМенеджер: [0:34] переглядайте мої повідомлення. Домовилися?  \nКлієнт: [0:37] Alright.  \nМенеджер: [0:38] Домовилися.  \nМенеджер: [0:39] В цілому стосовно гри на сайті, як ваша гра проходить?  \nМенеджер: [0:46] Алло.  \nКлієнт: [0:47] No.  \nМенеджер: [0:48] Як гра ваша проходить?  \nКлієнт: [0:49] No. No.  \nКлієнт: [0:51] That's...  \nКлієнт: [0:53] What the  \nМенеджер: [0:54] Потихеньку.  \nМенеджер: [0:55] Ви щось засмучені? У вас щось сталося?  \nКлієнт: [0:58] [низька якість розпізнавання] Ten minutes.  \nМенеджер: [1:01] Зараз себе як почуваєте? Нічого серйозного, сподіваюсь?  \nМенеджер: [1:06] Як почуваєте себе?  \nКлієнт: [1:06] [низька якість розпізнавання] No. No.  \nКлієнт: [1:09] That's all.  \nМенеджер: [1:10] Посереднє. Ну, одужання я вам бажаю лише міцного здоров'я.  \nМенеджер: [1:14] Бережіть себе, звісно. Ну, у випадку чого я бонуси підготувала. Ви сьогодні з поповненням заріте грати.  \nМенеджер: [1:24] Алло?  \nМенеджер: [1:28] Юрію, ви мене добре чуєте?  \nМенеджер: [1:32] Ало.  \nМенеджер: [1:37] Ало.",
+  "deepgram_transcript": "ch_1: Hello?\nch_0: О, Юрій, добрий вечір.\nch_1: Hello, man.\nch_0: Добре. Це Наталя, ваш менеджер по роботі зі клієнтами. Сайту Betking. Маєте хвилинку?\nch_1: [низька якість розпізнавання] Talk to later.\nch_0: Добре. Я дуже рада вас чути. Як справи ваші?\nch_0: Давно не можу до вас додзвонитися.\nch_0: Вже місяць, навіть більше не можу додзвонитися. Добре у вас?\nch_0: Ваші ж бонуси згорають, на жаль, коли коли не активовуються вчасно.\nch_0: Тому, будь ласка, по можливості\nch_0: переглядайте мої повідомлення. Домовилися?\nch_1: Alright.\nch_0: Домовилися. В цілому стосовно гри на сайті, як ваша гра проходить?\nch_0: Алло.\nch_1: No.\nch_0: Як гра ваша проходить?\nch_1: No. No. That's... What the\nch_0: Потихеньку. Ви щось засмучені? У вас щось сталося?\nch_1: [низька якість розпізнавання] Ten minutes.\nch_0: Зараз себе як почуваєте? Нічого серйозно, сподіваюсь?\nch_0: Як почуваєте себе?\nch_1: [низька якість розпізнавання] No. No.\nch_1: That's all.\nch_0: Посереднє. Ну, одужання я вам бажаю лише міцного здоров'я.\nch_0: Бережіть себе, звісно. Ну, у випадку чого я бонуси підготувала. Ви сьогодні з поповненням заріте грати.\nch_0: Алло? Юрію, ви мене добре чуєте?\nch_0: Ало. Ало."
+ },
+ {
+  "client_id": "9823795",
+  "call_type": "vip_short_90s",
+  "project": "Betking",
+  "tl": "Мальцева Єлизавета",
+  "tl_comment": "9823795 не спросил есть ли вопросы? но договорись о перезвоне с датой и временем\n5 вместо 0",
+  "disputed_criteria": "Завершення",
+  "reason": "Домовились про передзвін з датою → Д14 автозалік",
+  "stored_scores": {
+   "contact": 5.0,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 0.0
+  },
+  "stored_total": 25,
+  "expected_scores": {
+   "closing": 5.0
+  },
+  "expected_total": 30.0,
+  "expected_critical": false,
+  "qa_comment": "Сервіс не зручно в наступну п'ятницю",
+  "call": {
+   "tl": "Мальцева Єлизавета",
+   "card_id": 1,
+   "project": "betking",
+   "call_date": "12.11.2026",
+   "client_id": "9823795",
+   "check_date": "13.11.2026",
+   "qa_manager": "Діана",
+   "analysis_id": "986484afb8247a2a4758d2432c03faf5",
+   "ret_manager": "Шмалько Дмитро",
+   "bonus_status": "Бонус не нараховано",
+   "manager_login": "dshma",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": true,
+   "betking_x2_applicable": true,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "prep": {
+    "objections": [],
+    "tech_followup": false,
+    "objections_present": false
+   },
+   "closing": {
+    "evidence": [
+     "[0:31] Менеджер: Ти до зв’язку. Гарного дня."
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [],
+    "named_project": true,
+    "project_quote": "[0:10] Цей dimave ip менеджер сайту Betking.",
+    "greeting_quote": "[0:08] Доброго дня, Олексія.",
+    "used_client_name": true,
+    "client_name_quote": "[0:08] Доброго дня, Олексія.",
+    "availability_quote": "[0:10] Цей dimave ip менеджер сайту Betking. Зручно? Я хвилинка у вас.",
+    "manager_name_quote": "",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": false,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": true,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [],
+    "proposed_callback": true,
+    "reason_stated_by_client": false,
+    "specified_concrete_time": true,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": false,
+    "client_attempted_to_end_call": false,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": false,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": true
+   },
+   "shared_context": {
+    "evidence": [],
+    "moved_to_messenger": false,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Менеджер: Доброго дня, Олексія. Цей dimave ip менеджер сайту Betking. Зручно? Я хвилинка у вас.  \nКлієнт: Алло. Добро. Сейчас на май, вот сегодня, сегодня на завтра утром не звоню, хорошо?  \nМенеджер: Добре, добре. А на наступному тижні, коли там можу набрати?  \nКлієнт: Ну, я думаю, в п'ятницю я ж буду свободен.  \nМенеджер: В наступну п'ятницю?  \nКлієнт: Да-да-да.  \nМенеджер: Добре. У котрій? Десь такий час?  \nКлієнт: В любое время.  \nМенеджер: Добре. Ти до зв'язку. Гарного дня.",
+  "deepgram_transcript": "ch_0: Доброго дня, Олексія.\nch_1: Алло. Добро.\nch_0: Цей dimave ip менеджер сайту Bitking. Зручно? Я хвилинка у вас.\nch_1: Сейчас на май, вот сегодня,\nch_1: сегодня на завтра утром не звоню, хорошо?\nch_0: Добре, добре. А на наступному тижні, коли там можу набрати?\nch_1: Ну, я думаю, в пятницу я же буду свободен.\nch_0: В наступну п'ятницю?\nch_1: Да-да-да.\nch_0: Добре. У котрій? Десь такий час?\nch_1: В любое время.\nch_0: Добре. Ти до зв'язку. Гарного дня."
+ },
+ {
+  "client_id": "8834902",
+  "call_type": "vip_short_90s",
+  "project": "Betking",
+  "tl": "Мальцева Єлизавета",
+  "tl_comment": "8834902 менеджер представился и назвал имя игрока сразу же (было общение в ТГ в комменте написано) тут 5 из 5\nвопрос чи є ще питання - был\nтут 30 из 30 должно быть",
+  "disputed_criteria": "Встановлення контакту; Завершення",
+  "reason": "ТГ до дзвінка + менеджер назвав себе (Діма) → Д5; питання «чи є питання» було",
+  "stored_scores": {
+   "contact": 2.5,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 2.5
+  },
+  "stored_total": 25,
+  "expected_scores": {
+   "contact": 5.0,
+   "closing": 5.0
+  },
+  "expected_total": 30.0,
+  "expected_critical": false,
+  "qa_comment": "З ТГ  тех питання по виводу 20 хв будуть про Шахраїв повідомив 12.11.26",
+  "call": {
+   "tl": "Мальцева Єлизавета",
+   "card_id": 2,
+   "project": "betking",
+   "call_date": "12.11.2026",
+   "client_id": "8834902",
+   "check_date": "13.11.2026",
+   "qa_manager": "Діана",
+   "analysis_id": "48996aeb05f4ea4f53b299c2df31b6e7",
+   "ret_manager": "Шмалько Дмитро",
+   "bonus_status": "Бонус не нараховано",
+   "manager_login": "dshma",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": false,
+   "betking_x2_applicable": true,
+   "previous_call_not_service": false
+  },
+  "facts": {
+   "prep": {
+    "objections": [],
+    "tech_followup": false,
+    "objections_present": false
+   },
+   "closing": {
+    "evidence": [
+     "[0:55] Менеджер: А може у вас тільки питання?",
+     "[0:55] Менеджер: Добре. Гарного дня."
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": true,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [
+     "[0:04] Менеджер: Доброго дня, Михайло.",
+     "[0:04] Менеджер: Та цей Діма в мене це зручно. Я хвилинка.",
+     "[0:04] Менеджер: Та там побачив, писали зараз хвилинку по виводу.",
+     "[0:04] Менеджер: Це у вас перше виведення сьогодні.",
+     "[0:55] Менеджер: А так у вас там по сайту все нормально, може, які питання були?"
+    ],
+    "named_project": false,
+    "project_quote": "",
+    "greeting_quote": "[0:04] Доброго дня, Михайло.",
+    "used_client_name": true,
+    "client_name_quote": "[0:04] Доброго дня, Михайло.",
+    "availability_quote": "[0:04] Та цей Діма в мене це зручно. Я хвилинка.",
+    "manager_name_quote": "",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": false,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": true,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [],
+    "proposed_callback": false,
+    "reason_stated_by_client": false,
+    "specified_concrete_time": false,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": false,
+    "client_attempted_to_end_call": false,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": false,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": false
+   },
+   "shared_context": {
+    "evidence": [
+     "[0:04] Менеджер: Та там побачив, писали зараз хвилинку по виводу.",
+     "[0:04] Менеджер: Та цей Діма в мене це зручно. Я хвилинка."
+    ],
+    "moved_to_messenger": true,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Менеджер: Доброго дня, Михайло. Та цей дзвінок в мене це зручно. Я хвилинка. Ага. Та там побачив, писали зараз хвилинку по виводу. Так. Зараз дивлюся. Це у вас перше виведення сьогодні. А так. Зараз, зараз, зараз. Та дивіться, спробуйте пришвидшити. Просто бачу по цьому виведенню. Воно зараз автоматично через систему проходить. Там буквально 15 до 20 хвилин часу, він плюс-мінус там 20-22 хвилинки, то кошти будуть у вас. Добре?  \nКлієнт: Добре, добре, дякую.  \nМенеджер: Так. А так у вас там по сайту все нормально, може, які питання були? Так, добре. А хотів ще один момент уточнити. Підкажіть, до вас ніхто не звертався від імені співробітників компанії з приводу переказу там коштів на якісь рахунки чи в такого плані щось. Добре. Ну, в будь-якому випадку, якщо хтось буде звертатись, то жоден представник компанії не буде просити у вас переказувати кошти на якісь рахунки чи там і з приводу податків так само, що там сплатити якісь податки на сторонні рахунки, то якщо просто будуть у вас такі випадки, можете попросити реквізити, щоб вам надіслали, і ось скріншот мені скинути. Добре? Угу. Та по коштах то там буквально, я ж кажу, до 20 хвилинок. А може у вас тільки питання? Добре. Гарного дня.",
+  "deepgram_transcript": "ch_0: Доброго дня, Михайло. Та цей діма в мене це зручно. Я хвилинка.\nch_0: Ага. Та там побачив, писали зараз хвилинку\nch_0: по виводу. Так. Зараз дивлюся.\nch_0: Це у вас перше виведення сьогодні.\nch_0: А так. Зараз, зараз, зараз.\nch_0: Та дивіться, спробуй пришвидшити. Просто бачу по цьому виведенню. Воно зараз\nch_0: автоматично через систему проходить. Там буквально\nch_0: п'ятнадцять до двадцяти хвилин часу, він плюс-мінус там 20-22\nch_0: хвилинки, то кошти будуть у вас. Добре?\nch_1: Dobre, dobre, jacuzzi,.\nch_0: Так. А так у вас там по сайту все нормально, може, які питання були?\nch_0: Так, добре. А хотів ще один момент уточнити. Підкажіть, до вас ніхто не звертався від імені співробітників компанії\nch_0: з приводу переказу там коштів на якісь рахунки чи в такого плані щось.\nch_0: Добре. Ну, в будь-якому випадку, якщо хтось буде звертатись,\nch_0: то жоден представник компанії не буде просити у вас переказувати кошти на якісь рахунки\nch_0: чи там і з приводу податків так само, що там сплатити якісь податки на сторонні рахунки,\nch_0: то якщо просто будуть у вас такі випадки, можете попросити реквізити, щоб вам надіслали, І ось скріншот мені скинути. Добре?\nch_0: Угу. Та по коштах то там буквально, я ж кажу, до двадцяти хвилинок. А може у вас тільки питання?\nch_0: Добре. Гарного дня."
+ },
+ {
+  "client_id": "7456492",
+  "call_type": "vip_short_90s",
+  "project": "Betking",
+  "tl": "Мальцева Єлизавета",
+  "tl_comment": "7456492 полностью представилась, беткинг назвала, приветствие 5 из 5.\nЗавершення тоже 5/5 договорились на перезвон",
+  "disputed_criteria": "Встановлення контакту; Завершення",
+  "reason": "Проєкт названо (ASR зіпсував), ТГ у Важливому; домовились на передзвін",
+  "stored_scores": {
+   "contact": 2.5,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 0.0
+  },
+  "stored_total": 22.5,
+  "expected_scores": {
+   "contact": 5.0,
+   "closing": 5.0
+  },
+  "expected_total": 30.0,
+  "expected_critical": false,
+  "qa_comment": "с пн во второй половине дня",
+  "call": {
+   "tl": "Мальцева Єлизавета",
+   "card_id": 2,
+   "project": "betking",
+   "call_date": "05.11.2026",
+   "client_id": "7456492",
+   "check_date": "13.11.2026",
+   "qa_manager": "Діана",
+   "analysis_id": "91f60924272545e7563fd48d011c6651",
+   "ret_manager": "Сопчинська Софія",
+   "bonus_status": "Бонус не нараховано",
+   "manager_login": "sopchynska",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": false,
+   "betking_x2_applicable": true,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "prep": {
+    "objections": [
+     {
+      "type": "no_time",
+      "quote": "[0:14] Клієнт: Ні, вже немає часу.",
+      "handling": "resolved_with_check",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     },
+     {
+      "type": "no_time",
+      "quote": "[0:18] Клієнт: І теж вже немає часу.",
+      "handling": "resolved_with_check",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     },
+     {
+      "type": "no_time",
+      "quote": "[0:22] Клієнт: Ні, ні, ні.",
+      "handling": "resolved_with_check",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     }
+    ],
+    "tech_followup": false,
+    "objections_present": true
+   },
+   "closing": {
+    "evidence": [
+     "[0:37] Менеджер: Добре. Тоді гарного вечора. До побачення."
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [
+     "[0:07] Менеджер: Андрію, добрий день. Це",
+     "[0:10] Менеджер: Софія, я ваш менеджер Джордж, з сайту Vegas. Маєте пару хвилин?",
+     "Важливе / попередній контакт: опыт есть \\nтг \\nзависит от работы, не может наперед говорить"
+    ],
+    "named_project": true,
+    "project_quote": "[0:10] Софія, я ваш менеджер Джордж, з сайту Vegas.",
+    "greeting_quote": "[0:07] Андрію, добрий день.",
+    "used_client_name": true,
+    "client_name_quote": "[0:07] Андрію, добрий день.",
+    "availability_quote": "[0:10] Софія, я ваш менеджер Джордж, з сайту Vegas. Маєте пару хвилин?",
+    "manager_name_quote": "[0:10] Софія, я ваш менеджер Джордж, з сайту Vegas.",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": true,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": true,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [
+     "[0:14] Клієнт: Ні, вже немає часу.",
+     "[0:15] Менеджер: Добре. А коли можу вас тоді донабрати?",
+     "[0:29] Клієнт: Можна з другої половини дня."
+    ],
+    "proposed_callback": true,
+    "reason_stated_by_client": true,
+    "specified_concrete_time": true,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": true,
+    "client_attempted_to_end_call": true,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": true,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": true
+   },
+   "shared_context": {
+    "evidence": [
+     "[0:29] Клієнт: Можна з другої половини дня.",
+     "Важливе / попередній контакт: опыт есть \\nтг \\nзависит от работы, не может наперед говорить"
+    ],
+    "moved_to_messenger": false,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Менеджер: Андрій, добрий день. Це  \nКлієнт: Добрий, добра, ні.  \nМенеджер: Софія, я ваш менеджер Джордж, з сайту Vegas. Маєте пару хвилин?  \nКлієнт: Ні, вже немає часу.  \nМенеджер: Добре. А коли можу вас тоді донабрати?  \nКлієнт: І теж вже немає часу.  \nМенеджер: Угу. А завтра у вас протягом дня не буде вільної хвилинки?  \nКлієнт: Ні, ні, ні, ні.  \nМенеджер: В понеділок тоді о котрій можу вас набрати?  \nКлієнт: Наприкінці дня.  \nМенеджер: Угу. Добре. Можливо, вам перед вихідними хоч якісь бонуси на сайті залишити?  \nКлієнт: Ні, нічого не маю.  \nМенеджер: Добре. Тоді гарного вечора. До побачення.",
+  "deepgram_transcript": "ch_1: Halo?\nch_0: Андрій, добрий день. Це\nch_1: Dobry Dobra, nie.\nch_0: Софія, ваш я пімона Джорджа, сет у батьківах. Маєте пару хвилин?\nch_1: Nie, nie ma już się na rzecz.\nch_0: Добре. А коли можу вас тоді донабрати?\nch_1: I też już jest pana Giuka.\nch_0: Угу. А завтра у вас там протягом дня не буде пильної хвилинки?\nch_1: Nie, nie, nie, nie.\nch_0: В понеділок тоді у котрій можу вас набрати?\nch_1: No ma z drugiej połowy dnia.\nch_0: Угу. Добре. Можливо, вам перед вихідними там хоч бонуси якісь на сайті залишите?\nch_1: Nie, nici one mam.\nch_0: Добре. Тоді гарного вечора. До побачення."
+ },
+ {
+  "client_id": "3045710",
+  "call_type": "vip_short_90s",
+  "project": "Betking",
+  "tl": "Мальцева Єлизавета",
+  "tl_comment": "3045710 полностью представила, проект назвала,приветствие 5 из 5",
+  "disputed_criteria": "Встановлення контакту",
+  "reason": "TL: проєкт названо. АЛЕ ім'я клієнта в обох транскриптах відсутнє → за гайдом 2.5 (див. ТЗ, п. «Рішення»)",
+  "stored_scores": {
+   "contact": 2.5,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 5.0
+  },
+  "stored_total": 27.5,
+  "expected_scores": {
+   "contact": 2.5
+  },
+  "expected_total": 27.5,
+  "expected_critical": false,
+  "qa_comment": "Есть минутка. Дела хорошо. Зайдет сег. 2х25, х2 24. Пока включили свет занимается домашними делами.",
+  "call": {
+   "tl": "Мальцева Єлизавета",
+   "card_id": 2,
+   "project": "betking",
+   "call_date": "04.11.2026",
+   "client_id": "3045710",
+   "check_date": "13.11.2026",
+   "qa_manager": "Діана",
+   "analysis_id": "336921d6f11cb391e5e33dc021094c61",
+   "ret_manager": "Карімова Раміла",
+   "bonus_status": "Бонус нараховано вірно",
+   "manager_login": "rkarimova",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": false,
+   "betking_x2_applicable": true,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "prep": {
+    "objections": [],
+    "tech_followup": false,
+    "objections_present": false
+   },
+   "closing": {
+    "evidence": [
+     "[2:03] Менеджер: обов'язково маякуйте може я привного вечора тихої ночі.",
+     "[2:09] Менеджер: Дякую дуже до побачення.",
+     "[2:08] Клієнт: Дякую вам також.",
+     "[2:10] Клієнт: На все добре."
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": true
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [],
+    "named_project": true,
+    "project_quote": "[0:41] Це Роміло до вас телефонує. Ваш менеджер Ростайту Betking.",
+    "greeting_quote": "[0:38] Вітаю вас. Доброго вечора.",
+    "used_client_name": false,
+    "client_name_quote": "",
+    "availability_quote": "[0:46] Можете говорити?",
+    "manager_name_quote": "[0:41] Це Роміло до вас телефонує. Ваш менеджер Ростайту Betking.",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": true,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": false,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [],
+    "proposed_callback": false,
+    "reason_stated_by_client": false,
+    "specified_concrete_time": false,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": false,
+    "client_attempted_to_end_call": false,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": false,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": false
+   },
+   "shared_context": {
+    "evidence": [],
+    "moved_to_messenger": false,
+    "client_ended_call_first": false,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Менеджер: Вітаю вас. Доброго вечора. Це Роміло до вас телефонує. Ваш менеджер Ростайту Betking. Зараз можете говорити?  \nКлієнт: Доброго вечора. Так, так. Слухаю вас. Є хвилинка.  \nМенеджер: Супер. Ви там як сьогодні? У вас це гаразд?  \nКлієнт: Дуже удачно.  \nМенеджер: Ой-ой-ой. Що ж таке? Що там сталося?  \nКлієнт: Не знаю.  \nМенеджер: Так.  \nКлієнт: Не знаю.  \nМенеджер: Щось особисто у вас чи на сайті? Виюсь спитати.  \nКлієнт: Я на сайті.  \nМенеджер: Ага. Бо в мене для вас з'явилися компліменти хороші. Може ввечері буде у вас там ще хвилин п'ять-десять трішки пограти.  \nКлієнт: Може бути, бо в нас ще з цим світлом зараз перебої.  \nМенеджер: О, тут взагалі в мене вмикають один одну годину на добу. Я ледь встигаюся зарядити швидко, там попрати.  \nКлієнт: Це капець.  \nМенеджер: Це так. В Києві зараз так напереливки з цим світлом взагалі. Це ще не зима навіть.  \nКлієнт: Нас 12 годин це виключаю так за день. 12 годин немає. І майже все вдень.  \nМенеджер: Ну так. Обмикають вночі, правильно? Щоб поставали, я все робили. Таке. Я то вам компліментик лишила. Він чекає вас до буду активації. Там буде вейджер X25, і максимально з нього можна буде отримати 10 000.  \nКлієнт: Добре.  \nМенеджер: Зараз я залишаю. І там ще буде у вас також вмикаю бустер на подвоєння балів. Це X2 на 24 години. Там не піймали на збереження нічого. Я то вам це і залишаю. А так там посада у вас все нормально працює? Можливо, там були питаннячка.  \nКлієнт: Поки що нічого такого. Якщо щось буде, то я вам напишу.  \nМенеджер: Ага, обов'язково маякуйте. Може я привного вечора тихої ночі.  \nКлієнт: Дякую вам також.  \nМенеджер: Дякую дуже. До побачення.  \nКлієнт: На все добре.",
+  "deepgram_transcript": "ch_0: Вітаю вас. Доброго вечора.\nch_1: Доброго вечора.\nch_0: Це Роміло до вас телефонує. Ваші планети Ростайту Bet Kings.\nch_0: Зараз\nch_1: Так, так. Слухаю вас.\nch_0: можете говорити?\nch_1: Є хвилинка.\nch_0: Супер. Ви там як сьогодні? У вас це гаразд?\nch_1: Дуже удачно.\nch_0: Ой-ой-ой. Що ж таке? Що там сталося?\nch_1: Не знаю.\nch_0: Так.\nch_1: Не знаю.\nch_0: Щось особисто у вас чи на сайті? Виюсь спитати.\nch_1: Я на сайті.\nch_0: Ага. Бо в мене для вас з'явилися компліменти хороші. Може ввечері буде у вас там ще хвилин п'ять-десять трішки пограти.\nch_1: Може бути, бо в нас ще з цим світлом зараз перебої.\nch_0: О, тут взагалі в мене вмикають один одну годину на добу. Я ледь встигаюся зарядити швидко, там попрати.\nch_1: Це капець.\nch_0: Це так. В Києві зараз так напереливки з цим світлом взагалі. Це ще не зима навіть.\nch_1: Нас 12 годин це виключаю так за день. 12 годин немає.\nch_0: Ого.\nch_1: І майже все вдень.\nch_0: Ну так. Обмикають вночі, правильно? Щоб поставали, я все робили.\nch_0: Таке. Я то вам компліментик лишила. Він чекає вас до буду активації. Там буде бейджер X 25-й,\nch_0: і максимально з нього можна буде отримати десять тисяч.\nch_1: Добре.\nch_0: Зараз я залишаю. І там ще буде у вас також вмикаю бустер на подвоєння балів. Це X2 на 24 години. Там не піймали на збереження\nch_0: нічого. Я то вам це і залишаю.\nch_0: А так там посада у вас все нормально працює? Можливо, там були питаннячка.\nch_1: Поки що нічого такого. Якщо щось буде, то я вам напишу.\nch_0: Ага обов'язково маякуйте може я прівного вечора тихої ночі\nch_1: Дякую вам також.\nch_0: дякую дуже до побачення\nch_1: На все добре."
+ },
+ {
+  "client_id": "2443983",
+  "call_type": "vip_short_90s",
+  "project": "777",
+  "tl": "Шваб Валерія",
+  "tl_comment": "Клиентка несколько раз просит менеджера не звонить, на что менеджер в тупую игнорирую ее просьбы продолжает удерживать ее на линии - звучит грубо по отношению к клиентке, продолжил продажу вместо того, чтобы договориться о другом времени.\nНамеренно затягивал диалог , стоит 10 - надо 0 ",
+  "disputed_criteria": "Робота менеджера зі \"зливом\" клієнта; Невимушеність",
+  "reason": "Клієнтка кілька разів просила не дзвонити, менеджер продовжував → критична помилка, 0/30",
+  "stored_scores": {
+   "contact": 5.0,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 5.0
+  },
+  "stored_total": 30,
+  "expected_scores": {
+   "slip_handling": 0.0
+  },
+  "expected_total": 0.0,
+  "expected_critical": true,
+  "qa_comment": "Говорити взагалі не зоче / не цікаво нічого / говорить ви займаєтесь Хернею  / скіпнула",
+  "call": {
+   "tl": "Шваб Валерія",
+   "card_id": 2,
+   "project": "777",
+   "call_date": "05.11.2026",
+   "client_id": "2443983",
+   "check_date": "13.11.2026",
+   "qa_manager": "Дар'я",
+   "analysis_id": "5895aca2ba08b96c6826d98adcf6309e",
+   "ret_manager": "Резнік Сергій",
+   "bonus_status": "Бонус нараховано невірно",
+   "manager_login": "rezs",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": false,
+   "betking_x2_applicable": false,
+   "previous_call_not_service": false
+  },
+  "facts": {
+   "prep": {
+    "objections": [
+     {
+      "type": "no_time",
+      "quote": "[0:30] Клієнт: Ой, Боже, мені не зручно з вами спілкуватися.",
+      "handling": "resolved_with_check",
+      "offer_quote": "",
+      "right_before_client_hangup": false
+     }
+    ],
+    "tech_followup": false,
+    "objections_present": true
+   },
+   "closing": {
+    "evidence": [
+     "[0:56] Клієнт: Гарного вам вечора. І вашому сайту, блядь,",
+     "[0:59] Клієнт: самих вищих благ. Гарного вам вечора, Сергій.",
+     "[1:06] Клієнт: Гарного вечора, Сергій. Щоб я вам не грубила, ви телефонуйте мені. Добре?"
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [
+     "[0:24] Менеджер: Доброго вечора, Ольга. Це",
+     "[0:27] Менеджер: Сергій, у мене через сайт 37K.ua. Чи зручно вам спілкуватись?",
+     "[0:30] Клієнт: Ой, Боже, мені не зручно з вами спілкуватися."
+    ],
+    "named_project": true,
+    "project_quote": "[1:21] Займаємося хернею з вашим 777.",
+    "greeting_quote": "[0:24] Доброго вечора, Ольга. Це",
+    "used_client_name": true,
+    "client_name_quote": "[0:24] Доброго вечора, Ольга. Це",
+    "availability_quote": "[0:27] Сергій, у мене через сайт 37K.ua. Чи зручно вам спілкуватись?",
+    "manager_name_quote": "",
+    "availability_check_done": true,
+    "exception_number_signed": false,
+    "manager_introduced_self": false,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": true,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [
+     "[0:30] Клієнт: Ой, Боже, мені не зручно з вами спілкуватися.",
+     "[0:34] Менеджер: Гаразд. Скажіть, будь ласка, коли я до вас можу зателефонувати? Коли вам було б зручно?",
+     "[0:37] Клієнт: Не знаю, через років три. Перетелефонуйте",
+     "[0:40] Клієнт: через років три. Добре?"
+    ],
+    "proposed_callback": true,
+    "reason_stated_by_client": true,
+    "specified_concrete_time": true,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": true,
+    "client_attempted_to_end_call": true,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": true,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": true
+   },
+   "shared_context": {
+    "evidence": [
+     "[0:30] Клієнт: Ой, Боже, мені не зручно з вами спілкуватися.",
+     "[1:06] Клієнт: Гарного вечора, Сергій. Щоб я вам не грубила, ви телефонуйте мені. Добре?",
+     "[1:29] Клієнт: Сергій, гарного вам вечора."
+    ],
+    "moved_to_messenger": false,
+    "client_ended_call_first": true,
+    "client_interrupted_manager": true,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": true
+   }
+  },
+  "gpt_transcript": "Клієнт: Алло?  \nМенеджер: Доброго вечора, Ольга. Це  \nКлієнт: Доброго вечора. Так.  \nМенеджер: Сергій, у мене через сайт 37K.ua. Чи зручно вам спілкуватись?  \nКлієнт: Ой, Боже, мені не зручно з вами спілкуватися. Чесно, слово.  \nМенеджер: Гаразд. Скажіть, будь ласка, коли я до вас можу зателефонувати? Коли вас була б повільна?  \nКлієнт: Не знаю, через років три. Перетелефонками через років три. Добре?  \nМенеджер: А чому що не так?  \nКлієнт: Так хочу. Що вам смішно геть? Мені само смішно, чесно, Сергій.  \nМенеджер: На рахунок чого?  \nКлієнт: На рахунок вашого всім-всім-всім.  \nМенеджер: А що не так? Там зі мною чи сайтом, щоб мене розуміння склалось.  \nКлієнт: Гарного вам вечора. І вашому сайту, блядь, самих вищих благ. Гарного вам вечора, Сергій.  \nМенеджер: В вас щось на сайті трапилося, правильно розумію чи ні?  \nКлієнт: Гарного вечора, Сергій. Щоб я вам не грубила, ви телефонуйте мені. Добре?  \nМенеджер: Ні.  \nКлієнт: І що? Ні.  \nМенеджер: Дивіться, я перепрошую, ви працюєте. Правильно я розумію? Тобто ви виконуєте свою роботу. Я виконую свою роботу так само, як і у вас свою.  \nКлієнт: Ми не працюємо. Не працюємо. Займаємося хернею з вашим 777.  \nМенеджер: А що не так у вас на сайті? Тобто ви заходите грати?  \nКлієнт: Сергій, гарного вам вечора.  \nМенеджер: Окрім цього я дос... Добре, тоді дивіться",
+  "deepgram_transcript": "ch_1: Алло?\nch_0: Доброго вечора, Ольга. Це\nch_1: Доброго вечора. Так.\nch_0: Сергій у мене через сайт 37K. Ua. Чи зручно вам спілкуватись?\nch_1: Ой, Боже, мені не зручно з вами спілкуватися.\nch_1: Чесно, слово.\nch_0: Гаразд. Скажіть, будь ласка, коли я до вас можу зателефонувати? Коли вас була б коли була повільна?\nch_1: Не знаю, через років три. Перетелефонками\nch_1: через років три. Добре?\nch_0: А чому що не так\nch_1: Так хочу. Що вам смішно геть? Мені само смішно, чесно, Сергій.\nch_0: на рахунок чого\nch_1: На рахунок вашого всім-всім-всім.\nch_0: А що не так? Там зі мною чи сайтл, щоб мене розуміння склалось.\nch_1: Гарного вам вечора. І вашому сайту, блядь,\nch_1: самих вищих благ. Гарного вам вечора, Сергій.\nch_0: В вас щось на сайті трапилося, правильно розумію чи ні?\nch_1: Гарного вечора, Сергій. Щоб я вам не грубила, ви телефонуйте мені. Добре?\nch_0: Ні.\nch_1: І що? Ні.\nch_0: Дивіться, я перепрошую, ви працюєте. Правильно я розумію? Тобто ви виконуєте свою роботу. Я виконую свою роботу так само, як і у вас свою.\nch_1: Ми не працюємо. Не працюємо.\nch_1: Займаємося хернею з вашим 777.\nch_0: А що не так у вас на сайті?\nch_0: Тобто ви заходите грати?\nch_1: Сергій, гарного вам вечора.\nch_0: Окрім цього я дос... Добре, тоді дивіться"
+ },
+ {
+  "client_id": "5356908",
+  "call_type": "vip_short_90s",
+  "project": "777",
+  "tl": "Крисак Іван",
+  "tl_comment": "Клиенту звонили \"по запиту\", сняли за то что не спросил будет ли минутка у клиента, но клиент сам запросил звонок ",
+  "disputed_criteria": "Встановлення контакту",
+  "reason": "Дзвінок за запитом клієнта — перевірка зручності не потрібна",
+  "stored_scores": {
+   "contact": 2.5,
+   "slip_handling": 10.0,
+   "prep": 10.0,
+   "closing": 5.0
+  },
+  "stored_total": 27.5,
+  "expected_scores": {
+   "contact": 5.0
+  },
+  "expected_total": 30.0,
+  "expected_critical": false,
+  "qa_comment": "по запиту/  попросив щоб надали йому заяву на розірвання  діл.звя'зків  - відправила до тех.підтримки",
+  "call": {
+   "tl": "Крисак Іван",
+   "card_id": 1,
+   "project": "777",
+   "call_date": "05.11.2026",
+   "client_id": "5356908",
+   "check_date": "16.11.2026",
+   "qa_manager": "Дар'я",
+   "analysis_id": "8e929ce81c946ce7b79bf74573cfc80f",
+   "ret_manager": "Войтер Тетяна",
+   "bonus_status": "Бонус не нараховано",
+   "manager_login": "tvoy",
+   "number_signed": false,
+   "tech_followup": false,
+   "vip_call_type": "Короткий 120 сек",
+   "has_tl_permission": false,
+   "journal_call_type": "short",
+   "client_is_military": false,
+   "betking_x2_applicable": false,
+   "previous_call_not_service": true
+  },
+  "facts": {
+   "prep": {
+    "objections": [],
+    "tech_followup": false,
+    "objections_present": false
+   },
+   "closing": {
+    "evidence": [
+     "[1:57] Клієнт: Да, все, до свидания.",
+     "[1:59] Менеджер: Та допобачення."
+    ],
+    "d14_quote": "",
+    "quote_mode": false,
+    "said_goodbye": true,
+    "thanked_quote": "",
+    "agreed_follow_up": false,
+    "client_ended_quote": "",
+    "connection_dropped": false,
+    "said_goodbye_quote": "",
+    "client_silent_at_end": false,
+    "client_ended_verified": false,
+    "asked_if_more_questions": false,
+    "connection_dropped_quote": "",
+    "asked_if_more_questions_quote": "",
+    "thanked_and_left_contact_open": false
+   },
+   "contact": {
+    "greeted": true,
+    "evidence": [
+     "[0:07] Менеджер: Сергій, доброго дня.",
+     "[0:09] Менеджер: Мене звати Танія, 777 UA VIP менеджер.",
+     "[0:42] Клієнт: Ну да, да, как там вам, как вам удобнее?"
+    ],
+    "named_project": true,
+    "project_quote": "[0:09] Мене звати Танія, 777 UA VIP менеджер.",
+    "greeting_quote": "[0:07] Сергій, доброго дня.",
+    "used_client_name": true,
+    "client_name_quote": "[0:07] Сергій, доброго дня.",
+    "availability_quote": "",
+    "manager_name_quote": "[0:09] Мене звати Танія, 777 UA VIP менеджер.",
+    "availability_check_done": false,
+    "exception_number_signed": false,
+    "manager_introduced_self": true,
+    "availability_check_relevant": true,
+    "exception_prior_messenger_contact": false,
+    "exception_client_interrupted_intro": false,
+    "exception_client_recognized_manager": false,
+    "exception_answered_question_then_finished_intro": false
+   },
+   "slip_critical": {
+    "evidence": [],
+    "artificially_extended_call": false,
+    "asked_irrelevant_questions": false,
+    "delayed_ending_after_callback_agreed": false,
+    "continued_pitch_instead_of_agreeing_callback": false,
+    "continued_pitch_after_client_said_cannot_talk": false
+   },
+   "slip_handling": {
+    "evidence": [
+     "[0:51] Клієнт: Не стыдно хочу с вами, гондонами, разорвать договор.",
+     "[0:36] Менеджер: Це вам, мабуть, через техпідтримку. Так?",
+     "[1:19] Менеджер: Я вас тоді перенаправлю до нашої техпідтримки. Ви можете їм написати. Вони вам на електронну пошту надішлють договір та зразок заповнення."
+    ],
+    "proposed_callback": false,
+    "reason_stated_by_client": true,
+    "specified_concrete_time": false,
+    "retention_opportunity_note": "",
+    "reason_clarified_by_manager": true,
+    "client_attempted_to_end_call": true,
+    "retention_opportunity_missed": false,
+    "manager_reacted_appropriately": true,
+    "client_flatly_refused_any_callback": false,
+    "confirmed_agreement_or_clear_refusal": true
+   },
+   "shared_context": {
+    "evidence": [
+     "[1:57] Клієнт: Да, все, до свидания."
+    ],
+    "moved_to_messenger": false,
+    "client_ended_call_first": true,
+    "client_interrupted_manager": false,
+    "call_format_prevented_full_flow": false,
+    "client_said_no_time_and_hung_up": false,
+    "client_didnt_allow_finish_thought": false
+   }
+  },
+  "gpt_transcript": "Клієнт: Алло.  \nМенеджер: Сергій, доброго дня.  \nКлієнт: Добро.  \nМенеджер: Мене звати Танія, 777 UA VIP менеджер. Бачу, робили запит на отримання дзвінка. Вірно?  \nКлієнт: Да, был Запад на 3 мая звонка.  \nМенеджер: Так, все вірно. Супер.  \nКлієнт: Вы мне прислали в электронном виде на электронную почту, там у вас можно подать оформить заявление на аккаунта.  \nМенеджер: Це вам, мабуть, через техпідтримку. Так?  \nКлієнт: Ну да, да, как там вам, как вам удобнее?  \nМенеджер: Так. Ну, а ви хочете повноцінно так там обмежити?  \nКлієнт: Не стыдно хочу с вами, гондонами, разорвать договор.  \nМенеджер: Ну, якщо вам на електронну пошту надіслали договір, лист, так, ви його заповнюєте.  \nКлієнт: Так никто не присылал, говорю, нужно прислать, чтобы вы прислали мне вот этот, вот этот, куда перейти, где заполнить этот договор.  \nМенеджер: Я вас тоді перенаправлю до нашої техпідтримки. Ви можете їм написати. Вони вам на електронну пошту надішлють договір та зразок заповнення. Ви його заповнюєте,  \nКлієнт: Да.  \nМенеджер: підписуєте і відправляєте.  \nКлієнт: Да, да, вот так нужно мне сделать.  \nМенеджер: Так. Тобто ви можете звернутись до техпідтримки, до відділу сапорту. Вам все нададуть. Ви заповнюєте їм на ту саму електронну адресу, з якої вам буде відправлене повідомлення, відправляєте назад.  \nКлієнт: Хорошо, все.  \nМенеджер: Вони вам там всю інформацію нададуть.  \nКлієнт: Да, все, до свидания.  \nМенеджер: Та допобачення.",
+  "deepgram_transcript": "ch_1: Алло.\nch_0: Сергій, доброго дня.\nch_1: Добро.\nch_0: Мене звати Танія Сейта 777 UA VIP менеджер. Бачу, робили запит на отримання дзвінка. Вірно?\nch_1: Да, был Запад на 3 мая звонка.\nch_0: Так, все вірно. Супер.\nch_1: Вы мне прислали в электронном виде на электронную почту, там у вас можно подать\nch_1: оформить заявление на аккаунта.\nch_0: Це вам, мабуть, через техпідтримку.\nch_0: Так?\nch_1: Ну да, да, как там вам, как вам удобнее?\nch_0: Так. Ну, а ви хочете повноцінно\nch_0: так там обмежити?\nch_1: Не стыдно хочу с вами, гондонами,\nch_1: разорвать договор.\nch_0: Ну, якщо вам на електронну пошту\nch_0: надіслали договір, лист, так, ви його заповнюєте.\nch_1: Так никто не присылал, говорю, нужно прислать,\nch_1: чтобы вы прислали мне вот этот, вот этот, куда перейти, где заполнить этот\nch_1: договор.\nch_0: Я вас тоді перенаправлю до нашої техпідтримки.\nch_0: Ви можете їм написати. Вони вам на електронну пошту надішлять\nch_0: договір та зразок заповнення. Ви його заповнюєте,\nch_1: Да.\nch_0: підписуєте і відправляєте.\nch_1: Да, да, вот так нужно мне сделать.\nch_0: Так. Тобто ви можете звернутись до тих підтримки, до відділу сапорту.\nch_0: Вам все нададуть. Ви заповнюєте їм на на ту саму електронну поруч адресу, з якою вам буде відправ відправлене повідомлення, відправити назад.\nch_1: Хорошо, все.\nch_0: Вони вам там всю інформацію нададуть.\nch_1: Да, все, до свидания,.\nch_0: Та допобать."
+ }
+]

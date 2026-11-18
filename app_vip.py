@@ -288,14 +288,14 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
             transcript = clean_transcript_cached(
                 raw_transcript,
                 ANALYSIS_CACHE_VERSION,
-                manager_name="",
-                project_name="",
+                manager_name=str(call.get("ret_manager") or ""),
+                project_name=str(call.get("project") or ""),
             )
             timed_for_gpt = clean_transcript_cached(
                 timed_transcript,
                 f"{ANALYSIS_CACHE_VERSION}-timed",
-                manager_name="",
-                project_name="",
+                manager_name=str(call.get("ret_manager") or ""),
+                project_name=str(call.get("project") or ""),
             )
 
             selected = str(call.get("vip_call_type") or CALL_TYPE_SHORT_90S)
@@ -317,7 +317,9 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                     bool(call.get("betking_x2_applicable")),
                 )
                 # Портал: dialogue = cleaned transcript для цитат/grounding
-                verdict_data = score_vip_friendly_call(facts, call, transcript)
+                verdict_data = score_vip_friendly_call(
+                    facts, call, timed_for_gpt, source_text=transcript
+                )
             else:
                 facts = analyze_vip_short_90s_cached(
                     call.get("url", ""),
@@ -352,6 +354,7 @@ def _analyze_single_call(i, call, results_state, spinner_label=None):
                         verdict_data,
                         deepgram_transcript=raw_transcript,
                         gpt_transcript=transcript,
+                        gpt_timed_transcript=timed_for_gpt,
                     )
                 )
                 if supabase_ok:

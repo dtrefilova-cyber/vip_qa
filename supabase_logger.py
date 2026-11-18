@@ -155,6 +155,7 @@ def log_vip_short_call_to_supabase(
     verdict_data: dict,
     deepgram_transcript: str = "",
     gpt_transcript: str = "",
+    gpt_timed_transcript: str = "",
 ) -> bool:
     """Insert VIP call log. Never raises; never puts secrets/raw errors into session for UI."""
     import streamlit as st
@@ -241,6 +242,7 @@ def log_vip_short_call_to_supabase(
             },
             "uploader": {"qa_manager": qa_manager, "department": department},
             "build_sha": BUILD_SHA,
+            "gpt_timed_transcript": gpt_timed_transcript or "",
         },
     }
 

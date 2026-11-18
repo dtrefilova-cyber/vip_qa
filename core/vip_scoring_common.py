@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Literal
@@ -98,9 +99,10 @@ class ContactFacts(BaseModel):
     greeted: bool = False
     used_client_name: bool = False
     named_project: bool = False
-    availability_check_relevant: bool = False
+    availability_check_relevant: bool = True
     availability_check_done: bool = False
     exception_prior_messenger_contact: bool = False
+    exception_client_requested_call: bool = False
     exception_client_recognized_manager: bool = False
     exception_client_interrupted_intro: bool = False
     exception_answered_question_then_finished_intro: bool = False
@@ -214,14 +216,21 @@ def _contact_without_messenger(f: ContactFacts) -> tuple[float, str]:
         return 5.0, reason + suffix
 
     # Д11: перевірка зручності обов'язкова разом із привітанням, ім'ям і проєктом.
+    # Д17: дзвінок за запитом клієнта, або модель позначила перевірку нерелевантною.
+    skip_availability = bool(f.exception_client_requested_call) or f.availability_check_relevant is False
     element_labels = [
         (f.greeted, "привітання"),
         (f.used_client_name, "ім'я клієнта"),
         (f.named_project, "назва проєкту"),
-        (f.availability_check_done, "перевірка зручності («вам зручно» / «є хвилинка»)"),
     ]
+    if not skip_availability:
+        element_labels.append(
+            (f.availability_check_done, "перевірка зручності («вам зручно» / «є хвилинка»)")
+        )
     missing_labels = [label for ok, label in element_labels if not ok]
     if not missing_labels:
+        if f.exception_client_requested_call and not f.availability_check_done:
+            return 5.0, "Дзвінок за запитом клієнта — перевірка зручності не потрібна" + suffix
         return 5.0, ""
     if len(missing_labels) == 1:
         return 2.5, f"Відсутній елемент привітання: {missing_labels[0]}" + suffix
@@ -306,7 +315,16 @@ def score_prep(f: PrepFacts, ctx: SharedCallContext | None = None) -> CriterionS
     )
 
 
+_CALLBACK_D14_RE = re.compile(
+    r"набер|набрат|передзвон|зателефону|понеділ|вівтор|серед|четвер|"
+    r"п['’ʼ]ятниц|субот|неділ|завтра|тижн|о \d",
+    re.IGNORECASE,
+)
+
+
 def score_closing(f: ClosingFacts, ctx: SharedCallContext) -> CriterionScore:
+    if f.connection_dropped and not f.agreed_follow_up:
+        return CriterionScore("closing", 5.0, 5.0, ["Зв'язок обірвався"])
     if ctx.moved_to_messenger:
         return CriterionScore(
             "closing",
@@ -322,12 +340,14 @@ def score_closing(f: ClosingFacts, ctx: SharedCallContext) -> CriterionScore:
             ["Клієнт завершив дзвінок / зв'язок обірвався — автозалік" + _evidence_suffix(f.evidence)],
         )
     if (f.client_silent_at_end or f.agreed_follow_up) and str(f.d14_quote or "").strip():
-        return CriterionScore(
-            "closing",
-            5.0,
-            5.0,
-            ["Д14: автозалік завершення — " + f.d14_quote.strip()],
-        )
+        quote = f.d14_quote.strip()
+        if f.connection_dropped and not (f.agreed_follow_up and _CALLBACK_D14_RE.search(quote)):
+            reason = "Зв'язок обірвався"
+        elif f.agreed_follow_up and _CALLBACK_D14_RE.search(quote):
+            reason = "Д14: домовились про передзвін — " + quote
+        else:
+            reason = "Д14: автозалік завершення — " + quote
+        return CriterionScore("closing", 5.0, 5.0, [reason])
     element_labels = [
         (f.asked_if_more_questions, "питання «чи є ще питання»"),
         (f.said_goodbye, "прощання"),
@@ -350,3 +370,89 @@ def score_closing(f: ClosingFacts, ctx: SharedCallContext) -> CriterionScore:
         5.0,
         [f"Відсутні елементи завершення: {joined}"],
     )
+
+
+_APOSTROPHE_RE = re.compile(r"[’‘ʼ`]")
+_QUOTE_MARK_RE = re.compile(r"[«»\"']")
+_NUMBER_ONES = (
+    ("один", 1),
+    ("одна", 1),
+    ("одну", 1),
+    ("два", 2),
+    ("дві", 2),
+    ("три", 3),
+    ("чотири", 4),
+    ("п'ять", 5),
+    ("шість", 6),
+    ("сім", 7),
+    ("вісім", 8),
+    ("дев'ять", 9),
+)
+_NUMBER_TEENS = (
+    ("одинадцять", 11),
+    ("дванадцять", 12),
+    ("тринадцять", 13),
+    ("чотирнадцять", 14),
+    ("п'ятнадцять", 15),
+    ("шістнадцять", 16),
+    ("сімнадцять", 17),
+    ("вісімнадцять", 18),
+    ("дев'ятнадцять", 19),
+    ("десять", 10),
+)
+_NUMBER_TENS = (
+    ("двадцять", 20),
+    ("тридцять", 30),
+    ("сорок", 40),
+    ("п'ятдесят", 50),
+    ("шістдесят", 60),
+    ("сімдесят", 70),
+    ("вісімдесят", 80),
+    ("дев'яносто", 90),
+)
+_NUMBER_HUNDREDS = (
+    ("сто", 100),
+    ("двісті", 200),
+    ("триста", 300),
+    ("чотириста", 400),
+    ("п'ятсот", 500),
+    ("шістсот", 600),
+    ("сімсот", 700),
+    ("вісімсот", 800),
+    ("дев'ятсот", 900),
+)
+_NUMBER_WORDS = _NUMBER_TEENS + _NUMBER_TENS + _NUMBER_HUNDREDS + _NUMBER_ONES + (("нуль", 0),)
+
+
+def _replace_spoken_numbers(text: str) -> str:
+    """Слова-числа 0–10 000 → цифри. «тисяч*» → 1000, «двадцять чотири» → 24."""
+    updated = text
+    for ten_word, ten_value in _NUMBER_TENS:
+        for one_word, one_value in _NUMBER_ONES:
+            updated = re.sub(
+                rf"\b{ten_word}\s+{one_word}\b",
+                str(ten_value + one_value),
+                updated,
+                flags=re.IGNORECASE,
+            )
+    updated = re.sub(r"\bтисяч\w*\b", "1000", updated, flags=re.IGNORECASE)
+    for word, value in sorted(_NUMBER_WORDS, key=lambda item: len(item[0]), reverse=True):
+        updated = re.sub(rf"\b{word}\b", str(value), updated, flags=re.IGNORECASE)
+    return updated
+
+
+def normalize_for_quote(text: str) -> str:
+    """Порівняння цитат: лапки, апострофи, числа словами."""
+    cleaned = _APOSTROPHE_RE.sub("'", text or "")
+    cleaned = re.sub(r"\[\d+:\d+\]", " ", cleaned)
+    cleaned = _replace_spoken_numbers(cleaned)
+    cleaned = _QUOTE_MARK_RE.sub("", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+
+def quote_token_overlap(quote: str, haystack: str) -> float:
+    quote_tokens = re.findall(r"[0-9a-zа-яіїєґ]+", normalize_for_quote(quote))
+    hay_tokens = set(re.findall(r"[0-9a-zа-яіїєґ]+", normalize_for_quote(haystack)))
+    if not quote_tokens:
+        return 0.0
+    return sum(1 for token in quote_tokens if token in hay_tokens) / len(quote_tokens)

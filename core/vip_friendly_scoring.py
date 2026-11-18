@@ -255,8 +255,9 @@ _LEVEL_POINTS = {"7.5": 7.5, "7,5": 7.5, "5": 5.0, "5.0": 5.0, "2.5": 2.5, "2,5"
 
 
 def _flat(text: str) -> str:
-    cleaned = re.sub(r"\[\d+:\d+\]", " ", text or "")
-    return re.sub(r"\s+", " ", cleaned).strip().lower()
+    from core.vip_scoring_common import normalize_for_quote
+
+    return normalize_for_quote(text)
 
 
 def _clock(value: str | None) -> int | None:
@@ -266,25 +267,47 @@ def _clock(value: str | None) -> int | None:
     return int(match.group(1)) * 60 + int(match.group(2))
 
 
+def _dialogue_bodies(dialogue: str, speakers: set[str]) -> list[tuple[str, int | None]]:
+    rows: list[tuple[str, str, int | None]] = []
+    for raw in (dialogue or "").splitlines():
+        match = _QUOTE_LINE.match(raw.strip())
+        if not match or match.group("speaker").lower() not in speakers:
+            continue
+        clock = None
+        if match.group("minute") is not None:
+            clock = int(match.group("minute")) * 60 + int(match.group("second"))
+        rows.append((match.group("speaker").lower(), match.group("body") or "", clock))
+    glued: list[tuple[str, int | None]] = []
+    for speaker, body, clock in rows:
+        if glued and glued[-1][2] == speaker:
+            previous_body, previous_clock, _same = glued[-1]
+            glued[-1] = (previous_body + " " + body, previous_clock, speaker)
+        else:
+            glued.append((body, clock, speaker))
+    return [(body, clock) for body, clock, _speaker in glued]
+
+
 def _quote_hit(
     dialogue: str,
     quote: str,
     speakers: set[str],
     min_len: int = 8,
 ) -> tuple[bool, int | None]:
-    needle = _flat(quote).strip(" «»\"'«»")[:48]
+    from core.vip_scoring_common import quote_token_overlap
+
+    needle = _flat(quote)[:48]
     if len(needle) < min_len:
         return False, None
-    for raw in (dialogue or "").splitlines():
-        match = _QUOTE_LINE.match(raw.strip())
-        if not match or match.group("speaker").lower() not in speakers:
-            continue
-        if needle not in _flat(match.group("body")):
-            continue
-        clock = None
-        if match.group("minute") is not None:
-            clock = int(match.group("minute")) * 60 + int(match.group("second"))
-        return True, clock
+    bodies = _dialogue_bodies(dialogue, speakers)
+    for body, clock in bodies:
+        if needle in _flat(body):
+            return True, clock
+    for index, (body, clock) in enumerate(bodies):
+        haystacks = [body]
+        if index + 1 < len(bodies):
+            haystacks.append(body + " " + bodies[index + 1][0])
+        if any(quote_token_overlap(quote, hay) >= 0.8 for hay in haystacks):
+            return True, clock
     return False, None
 
 
@@ -517,7 +540,9 @@ _DEVALUE = re.compile(r"забер\w*.{0,40}якщо\s+захочете|коли
 _X2 = re.compile(r"\bx2\b|х2|бустер", re.IGNORECASE)
 _BONUS_OFFER = re.compile(r"депозит|поповн|пополн|бонус|фріспін|фриспін|вейджер|бустер|спін", re.IGNORECASE)
 _DEPOSIT_BONUS = re.compile(
-    r"до\s+депозит|(?<!без)на\s+деп|(?<!без)депозитн|на\s+поповнен|до\s+поповнен|пополн|поповн",
+    r"до\s+депозит|(?<!без)на\s+деп|(?<!без)депозитн|на\s+поповнен|до\s+поповнен|пополн|поповн|"
+    r"депозит\w*\s*(?:від\s*)?\d|\bдеп\w*\s*\d|при\s+поповнен|за\s+депозит|з\s+депозит|"
+    r"від\s+\d+\s*(?:грн|гривень|₴)",
     re.IGNORECASE,
 )
 _NOT_AN_OFFER = re.compile(r"гляну по бонус|щось залишу", re.IGNORECASE)
@@ -551,6 +576,14 @@ def ground_bonus_offer(bonus: dict, dialogue: str) -> dict:
     applicable = bool(data.get("betking_x2_applicable"))
     deposit_quote = str(data.get("first_deposit_bonus_quote") or "")
     no_deposit_quote = str(data.get("first_no_deposit_bonus_quote") or "")
+    if not _DEPOSIT_BONUS.search(deposit_quote):
+        terms_raw_early = data.get("terms_stated") if isinstance(data.get("terms_stated"), dict) else {}
+        min_deposit = str(terms_raw_early.get("min_deposit") or "")
+        if min_deposit and _DEPOSIT_BONUS.search(min_deposit):
+            found_min, _min_clock = _quote_hit(dialogue, min_deposit, _MANAGER_SPEAKERS, min_len=4)
+            if found_min:
+                data["first_deposit_bonus_quote"] = min_deposit
+                deposit_quote = min_deposit
     if not _DEPOSIT_BONUS.search(deposit_quote) and _DEPOSIT_BONUS.search(no_deposit_quote):
         data["first_deposit_bonus_quote"] = no_deposit_quote
         data["first_deposit_bonus_time"] = str(data.get("first_no_deposit_bonus_time") or "")
@@ -777,9 +810,15 @@ def score_vip_friendly(
     )
 
 
-def score_vip_friendly_call(facts: dict, call: dict | None = None, dialogue: str = "") -> dict:
+def score_vip_friendly_call(
+    facts: dict,
+    call: dict | None = None,
+    dialogue: str = "",
+    source_text: str = "",
+) -> dict:
     from core.vip_short_scoring import (
         manager_soft_invite_quote,
+        mark_client_requested_call,
         note_says_messenger,
         note_says_military,
         repair_obvious_closing,
@@ -788,6 +827,9 @@ def score_vip_friendly_call(facts: dict, call: dict | None = None, dialogue: str
 
     data = dict(facts or {})
     call = call or {}
+    search_text = dialogue or ""
+    if source_text and source_text != dialogue:
+        search_text = f"{dialogue}\n{source_text}".strip()
     cta = dict(data.get("call_to_action") or {})
     note = str(call.get("important_note") or "")
     comment = str(call.get("qa_comment") or "")
@@ -795,18 +837,18 @@ def score_vip_friendly_call(facts: dict, call: dict | None = None, dialogue: str
     military = bool(cta.get("client_is_military")) or bool(call.get("client_is_military"))
     military = military or note_says_military(note, comment, manager_comment)
     cta["client_is_military"] = military
-    invite = manager_soft_invite_quote(dialogue)
+    invite = manager_soft_invite_quote(search_text or dialogue)
     if military and invite:
         cta["invited_to_play_when_possible"] = True
         cta["invite_quote"] = invite
     elif not str(cta.get("invite_quote") or "").strip():
         cta["invited_to_play_when_possible"] = False
-    cta = ground_call_to_action(cta, dialogue)
+    cta = ground_call_to_action(cta, search_text or dialogue)
     quote = str(cta.get("client_declared_deposit_quote") or "")
     if cta.get("client_declared_deposit_today") and quote:
         client_blob = "\n".join(
             line.split(":", 1)[-1]
-            for line in (dialogue or "").splitlines()
+            for line in (search_text or dialogue or "").splitlines()
             if line.strip().startswith(("Клієнт", "Клиент", "ch_1"))
         )
         if quote.strip(" «»\"")[:24].lower() not in client_blob.lower():
@@ -815,13 +857,14 @@ def score_vip_friendly_call(facts: dict, call: dict | None = None, dialogue: str
     bonus = dict(data.get("bonus_offer") or {})
     if call.get("betking_x2_applicable") is not None:
         bonus["betking_x2_applicable"] = bool(call.get("betking_x2_applicable"))
-    data["bonus_offer"] = ground_bonus_offer(bonus, dialogue)
+    data["bonus_offer"] = ground_bonus_offer(bonus, search_text or dialogue)
+    contact = dict(data.get("contact") or {})
     if note_says_messenger(note, comment, manager_comment):
-        contact = dict(data.get("contact") or {})
         contact["exception_prior_messenger_contact"] = True
-        data["contact"] = contact
-    if dialogue:
-        data = repair_obvious_contact(data, dialogue)
+    contact = mark_client_requested_call(contact, call, dialogue, source_text)
+    data["contact"] = contact
+    if dialogue or source_text:
+        data = repair_obvious_contact(data, dialogue, source_text, call=call)
     if call.get("tech_followup"):
         approach = dict(data.get("personal_approach") or {})
         approach["tech_followup"] = True
@@ -829,12 +872,13 @@ def score_vip_friendly_call(facts: dict, call: dict | None = None, dialogue: str
         prep = dict(data.get("prep") or {})
         prep["tech_followup"] = True
         data["prep"] = prep
-    data["closing"] = ground_closing(dict(data.get("closing") or {}), dialogue)
-    if dialogue:
-        data = repair_obvious_closing(data, dialogue)
+    data["closing"] = ground_closing(dict(data.get("closing") or {}), search_text or dialogue)
+    if dialogue or source_text:
+        data = repair_obvious_closing(data, search_text or dialogue)
+    data.pop("_review_flags", None)
     bundle = VipFriendlyFactsBundle.model_validate(data)
     ctx = SharedCallContext.from_facts(bundle.shared_context.model_dump())
-    return score_vip_friendly(bundle, ctx, dialogue).to_dict()
+    return score_vip_friendly(bundle, ctx, search_text or dialogue).to_dict()
 
 
 def build_perfect_friendly_facts() -> VipFriendlyFactsBundle:
