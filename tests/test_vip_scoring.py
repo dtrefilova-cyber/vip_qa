@@ -211,3 +211,235 @@ def test_ai_models_registers_portal_tasks():
     cfg = get_task_config("facts_vip_friendly_bonus")
     assert cfg["registered"] is True
     assert cfg["model"]
+
+
+def _bonus(**overrides):
+    from core.vip_friendly_scoring import BonusOfferFacts
+
+    fields = dict(
+        deposit_bonus_offered_first=True,
+        all_terms_stated=True,
+        benefits_explained=False,
+        bonus_devalued=False,
+        no_deposit_bonus_applicable=False,
+        no_deposit_bonus_offered_after=False,
+        betking_x2_applicable=False,
+        betking_x2_booster_offered=False,
+        fs_applicable=False,
+    )
+    fields.update(overrides)
+    return BonusOfferFacts(**fields)
+
+
+def _bonus_with_terms(*, fs="n/a", fs_applicable=False, wager="вейджера немає", deposit_quote=""):
+    from core.vip_friendly_scoring import BonusOfferFacts, BonusTermsStated
+
+    return BonusOfferFacts(
+        deposit_bonus_offered_first=True,
+        all_terms_stated=False,
+        benefits_explained=False,
+        fs_applicable=fs_applicable,
+        first_deposit_bonus_quote=deposit_quote,
+        terms_stated=BonusTermsStated(
+            min_deposit="від 300 гривень",
+            validity="діє три дні",
+            wager=wager,
+            fs_count_and_bet=fs,
+        ),
+    )
+
+
+def test_friendly_bonus_checklist_is_in_prompt_and_guide_only():
+    from guides_content import GUIDE_VIP_FRIENDLY, GUIDE_VIP_SHORT_90S
+    from prompts_vip_friendly import get_vip_friendly_analysis_prompt, get_vip_friendly_bonus_prompt
+    from prompts_vip_short import get_vip_short_90s_analysis_prompt
+    from core.vip_friendly_scoring import FRIENDLY_BONUS_FIVE_POINT_RULES
+
+    item = next(row for row in GUIDE_VIP_FRIENDLY if row["title"] == "Пропозиція бонусів")
+    assert item["description"] == FRIENDLY_BONUS_FIVE_POINT_RULES
+    assert FRIENDLY_BONUS_FIVE_POINT_RULES in get_vip_friendly_bonus_prompt()
+    assert FRIENDLY_BONUS_FIVE_POINT_RULES in get_vip_friendly_analysis_prompt()
+    assert "2,5 — запропонував, але без однієї обов'язкової умови або формально" in item["scale"]
+    assert "0 — не запропонував депозитний першим / почав із бездепу / знецінив." in item["scale"]
+    assert "5 балів — виконано всі обов'язкові умови бонусу" not in get_vip_short_90s_analysis_prompt()
+    short_blob = "\n".join(
+        " ".join(str(row.get(key) or "") for key in ("title", "description", "scale", "notes"))
+        for row in GUIDE_VIP_SHORT_90S
+    )
+    assert "5 балів — виконано всі обов'язкові умови бонусу" not in short_blob
+
+
+def test_benefits_are_required_only_when_the_client_hesitates():
+    from core.vip_friendly_scoring import score_bonus_offer
+
+    assert score_bonus_offer(_bonus()).points == 5.0
+    hesitating = score_bonus_offer(_bonus(client_hesitates=True))
+    assert hesitating.points == 2.5
+    assert "переваги, коли клієнт вагається" in hesitating.reasons[0]
+    assert score_bonus_offer(_bonus(client_hesitates=True, benefits_explained=True)).points == 5.0
+
+    look = "Клієнт: [0:20] Подивлюсь"
+    assert score_bonus_offer(_bonus(), look).points == 2.5
+    assert score_bonus_offer(_bonus(benefits_explained=True), look).points == 5.0
+    unsure = "Клієнт: [0:20] Не знаю, чи заберу"
+    assert score_bonus_offer(_bonus(), unsure).points == 2.5
+
+
+def test_unprofitable_bonus_is_not_a_bonus_offer_miss():
+    from core.vip_friendly_scoring import score_bonus_offer
+
+    objection = "Клієнт: [0:20] Бонус невигідний, нічого не дає"
+    scored = score_bonus_offer(_bonus(client_hesitates=True), objection)
+    assert scored.points == 5.0
+    assert "переваги" not in " ".join(scored.reasons)
+
+    mixed = "Клієнт: [0:20] Не знаю, чи заберу, бонус нічого не дає"
+    assert score_bonus_offer(_bonus(), mixed).points == 5.0
+
+    both = "Клієнт: [0:18] Бонус нічого не дає\nКлієнт: [0:22] Не знаю, чи заберу"
+    assert score_bonus_offer(_bonus(), both).points == 2.5
+
+
+def test_no_deposit_and_betking_booster_are_not_always_required():
+    from core.vip_friendly_scoring import score_bonus_offer
+
+    assert score_bonus_offer(_bonus()).points == 5.0
+    skipped = score_bonus_offer(_bonus(no_deposit_bonus_applicable=True))
+    assert skipped.points == 2.5
+    assert "бездепозитний бонус" in skipped.reasons[0]
+    offered = _bonus(no_deposit_bonus_applicable=True, no_deposit_bonus_offered_after=True)
+    assert score_bonus_offer(offered).points == 5.0
+
+    assert score_bonus_offer(_bonus(betking_x2_booster_offered=False)).points == 5.0
+    betking = score_bonus_offer(_bonus(betking_x2_applicable=True))
+    assert betking.points == 2.5
+    assert "бустер Х2" in betking.reasons[0]
+    assert score_bonus_offer(_bonus(betking_x2_applicable=True, betking_x2_booster_offered=True)).points == 5.0
+
+
+def test_bonus_terms_require_wager_and_fs_only_when_fs_apply():
+    from core.vip_friendly_scoring import score_bonus_offer
+
+    assert score_bonus_offer(_bonus_with_terms()).points == 5.0
+    assert score_bonus_offer(_bonus_with_terms(fs=None)).points == 5.0
+    assert score_bonus_offer(_bonus_with_terms(wager="n/a")).points == 2.5
+    spins_only = score_bonus_offer(_bonus_with_terms(fs="20 фріспінів", fs_applicable=True))
+    assert spins_only.points == 2.5
+    voiced = _bonus_with_terms(fs="20 фріспінів, ставка 5 гривень", fs_applicable=True)
+    assert score_bonus_offer(voiced).points == 5.0
+    in_offer = _bonus_with_terms(
+        fs=None,
+        deposit_quote="депозитний бонус і 20 фріспінів, ставка 5 гривень",
+    )
+    assert score_bonus_offer(in_offer).points == 5.0
+    named_only = _bonus_with_terms(fs=None, deposit_quote="депозитний бонус, будуть фріспіни")
+    assert score_bonus_offer(named_only).points == 2.5
+    absent = _bonus_with_terms(fs="n/a", deposit_quote="депозитний бонус без фріспінів")
+    assert score_bonus_offer(absent).points == 5.0
+
+
+def test_zero_and_half_bands_stay_for_structure_devalue_and_a_missing_term():
+    from core.vip_friendly_scoring import score_bonus_offer
+
+    missing_deposit = score_bonus_offer(_bonus(deposit_bonus_offered_first=False))
+    assert missing_deposit.points == 0.0
+    devalued = score_bonus_offer(_bonus(bonus_devalued=True, benefits_explained=True))
+    assert devalued.points == 0.0
+    assert devalued.reasons == ["Не запропонував депозитний бонус першим / знецінив бонус"]
+    missing_terms = score_bonus_offer(_bonus(all_terms_stated=False))
+    assert missing_terms.points == 2.5
+
+
+def test_grounded_bonus_offer_follows_the_new_checklist():
+    from core.vip_friendly_scoring import BonusOfferFacts, ground_bonus_offer, score_bonus_offer, score_vip_friendly_call
+
+    dialogue = "\n".join([
+        "Менеджер: [0:10] депозитний бонус від 300 гривень, діє три дні, вейджера немає",
+        "Клієнт: [0:20] Добре, заберу сьогодні",
+    ])
+    raw = {
+        "first_deposit_bonus_quote": "депозитний бонус від 300 гривень, діє три дні, вейджера немає",
+        "first_deposit_bonus_time": "0:10",
+        "first_no_deposit_bonus_quote": "",
+        "terms_stated": {
+            "min_deposit": "від 300 гривень",
+            "validity": "діє три дні",
+            "wager": "вейджера немає",
+            "fs_count_and_bet": "n/a",
+        },
+        "benefits_quote": "",
+        "no_deposit_bonus_applicable": False,
+        "betking_x2_applicable": False,
+        "fs_applicable": False,
+    }
+    grounded = BonusOfferFacts.model_validate(ground_bonus_offer(raw, dialogue))
+    assert grounded.deposit_bonus_offered_first is True
+    assert grounded.benefits_explained is False
+    assert grounded.client_hesitates is False
+    assert grounded.fs_applicable is False
+    assert grounded.all_terms_stated is True
+    assert score_bonus_offer(grounded, dialogue).points == 5.0
+
+    hesitant = dialogue + "\nКлієнт: [0:24] Не знаю, чи заберу"
+    hesitant_facts = BonusOfferFacts.model_validate(ground_bonus_offer(raw, hesitant))
+    assert hesitant_facts.client_hesitates is True
+    assert score_bonus_offer(hesitant_facts, hesitant).points == 2.5
+    with_benefits = dict(raw, benefits_quote="перевага в тому, що відіграш швидший")
+    hesitant_benefits = hesitant + "\nМенеджер: [0:28] перевага в тому, що відіграш швидший"
+    explained = BonusOfferFacts.model_validate(ground_bonus_offer(with_benefits, hesitant_benefits))
+    assert explained.benefits_explained is True
+    assert score_bonus_offer(explained, hesitant_benefits).points == 5.0
+
+    applicable = dict(raw, no_deposit_bonus_applicable=True)
+    missed = BonusOfferFacts.model_validate(ground_bonus_offer(applicable, dialogue))
+    assert missed.no_deposit_bonus_applicable is True
+    assert missed.no_deposit_bonus_offered_after is False
+    assert score_bonus_offer(missed, dialogue).points == 2.5
+
+    later = dialogue + "\nМенеджер: [0:40] бездепозитний бонус 50 гривень на баланс"
+    after = dict(
+        applicable,
+        first_no_deposit_bonus_quote="бездепозитний бонус 50 гривень на баланс",
+        first_no_deposit_bonus_time="0:40",
+    )
+    ordered = BonusOfferFacts.model_validate(ground_bonus_offer(after, later))
+    assert ordered.deposit_bonus_offered_first is True
+    assert ordered.no_deposit_bonus_offered_after is True
+    assert score_bonus_offer(ordered, later).points == 5.0
+
+    betking_dialogue = dialogue + "\nМенеджер: [0:50] додатково бустер х2"
+    without_booster = BonusOfferFacts.model_validate(
+        ground_bonus_offer(dict(raw, betking_x2_applicable=True), betking_dialogue)
+    )
+    assert without_booster.betking_x2_booster_offered is False
+    assert score_bonus_offer(without_booster, betking_dialogue).points == 2.5
+    with_booster = dict(raw, betking_x2_applicable=True, x2_quote="додатково бустер х2")
+    boosted = BonusOfferFacts.model_validate(ground_bonus_offer(with_booster, betking_dialogue))
+    assert boosted.betking_x2_booster_offered is True
+    assert score_bonus_offer(boosted, betking_dialogue).points == 5.0
+
+    devalued_dialogue = dialogue + "\nМенеджер: [0:55] заберете, якщо захочете"
+    devalued = BonusOfferFacts.model_validate(
+        ground_bonus_offer(dict(raw, devalue_quote="заберете, якщо захочете"), devalued_dialogue)
+    )
+    assert devalued.bonus_devalued is True
+    assert score_bonus_offer(devalued, devalued_dialogue).points == 0.0
+
+    piped = score_vip_friendly_call({"bonus_offer": raw}, dialogue=dialogue)
+    bonus = next(item for item in piped["criteria"] if item["key"] == "bonus_offer")
+    assert bonus["points"] == 5.0
+
+
+def test_missing_benefits_do_not_cut_a_perfect_friendly_call_without_hesitation():
+    facts = build_perfect_friendly_facts()
+    facts.bonus_offer.benefits_explained = False
+    full = score_vip_friendly(facts, SharedCallContext())
+    bonus = next(item for item in full.criteria if item.key == "bonus_offer")
+    assert bonus.points == 5.0
+    assert full.total_score == 57.5
+
+    facts.bonus_offer.client_hesitates = True
+    hesitant = score_vip_friendly(facts, SharedCallContext())
+    bonus = next(item for item in hesitant.criteria if item.key == "bonus_offer")
+    assert bonus.points == 2.5
+    assert hesitant.total_score == 55.0
