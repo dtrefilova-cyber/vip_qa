@@ -786,6 +786,7 @@ def extract_vip_friendly_facts(
             "first_no_deposit_bonus_time",
             "terms_stated",
             "benefits_quote",
+            "client_hesitation_quote",
             "devalue_quote",
             "x2_quote",
         ):
@@ -957,11 +958,14 @@ def extract_vip_friendly_bonus_result(
         "first_no_deposit_bonus_quote",
         "first_no_deposit_bonus_time",
         "benefits_quote",
+        "client_hesitation_quote",
         "devalue_quote",
         "x2_quote",
     ):
         if field in block:
             block[field] = _as_text(block.get(field))
+    if "fs_applicable" in block:
+        block["fs_applicable"] = _as_bool(block.get("fs_applicable"))
     terms = block.get("terms_stated") if isinstance(block.get("terms_stated"), dict) else {}
     block["terms_stated"] = {
         key: _term_value(terms.get(key))

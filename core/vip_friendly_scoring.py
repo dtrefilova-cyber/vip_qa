@@ -24,6 +24,16 @@ RUBRIC_VERSION = "v1_friendly_ease75"
 CALL_TYPE_KEY = "vip_friendly"
 MAX_SCORE = 57.5
 
+# Єдиний текст 5 балів для промпта і гайду. 2,5 і 0 цей список не замінює.
+FRIENDLY_BONUS_FIVE_POINT_RULES = """5 балів — виконано всі обов'язкові умови бонусу:
+✔ дотримано структуру пропозиції: спочатку запропоновано депозитний бонус, після цього — бездепозитний бонус, якщо він передбачений умовами;
+✔ озвучено всі актуальні умови бонусу: мінімальну суму депозиту, термін дії бонусу, вейджер (розмір або відсутність), кількість FS та розмір ставки (якщо застосовується);
+✔ клієнт вагається, чи скористається бонусом ("не знаю, чи заберу", "подивлюсь") — менеджер підсвічує переваги, оцінюємо в «Пропозиції бонусів»;
+✔ клієнт каже, що бонус невигідний або нічого не дає — це заперечення, оцінюємо в «Роботі з запереченнями»;
+✔ клієнт не вагається — переваги не обов'язкові;
+✔ бонус не знецінено;
+✔ для Betking додатково запропоновано бустер Х2."""
+
 
 class FriendlyDevelopmentFacts(BaseModel):
     asked_relevant_personal_questions: bool = False
@@ -100,6 +110,9 @@ class BonusOfferFacts(BaseModel):
     benefits_quote: str = ""
     devalue_quote: str = ""
     x2_quote: str = ""
+    client_hesitates: bool = False
+    client_hesitation_quote: str = ""
+    fs_applicable: bool = False
 
 
 class EaseLevel(str, Enum):
@@ -521,6 +534,31 @@ _DEPOSIT_BONUS = re.compile(
     re.IGNORECASE,
 )
 _NOT_AN_OFFER = re.compile(r"гляну по бонус|щось залишу", re.IGNORECASE)
+_CLIENT_HESITATION = re.compile(
+    r"не\s+знаю,?\s+чи\s+забер\w*|подивлюсь|подивлюся",
+    re.IGNORECASE,
+)
+_BONUS_UNPROFITABLE = re.compile(
+    r"невигідн\w*|невигодн\w*|нічого\s+не\s+дає|ничего\s+не\s+дає|нічого\s+не\s+дасть|ничего\s+не\s+дает",
+    re.IGNORECASE,
+)
+_FS_MENTION = re.compile(r"фріспін|фриспін|\bfs\b|\bфс\b", re.IGNORECASE)
+_FS_ABSENT = re.compile(
+    r"без\s+(?:фріспін\w*|фриспін\w*|\bfs\b|\bфс\b)"
+    r"|(?:немає|нема)\s+(?:фріспін\w*|фриспін\w*|\bfs\b|\bфс\b)"
+    r"|(?:фріспін\w*|фриспін\w*)\s+нема",
+    re.IGNORECASE,
+)
+_FS_COUNT = re.compile(
+    r"\d+\s*(?:фріспін\w*|фриспін\w*|\bfs\b|\bфс\b|спін\w*)"
+    r"|(?:фріспін\w*|фриспін\w*|\bfs\b|\bфс\b)[^\d]{0,20}\d+",
+    re.IGNORECASE,
+)
+_FS_STAKE = re.compile(
+    r"ставк\w*|\bпо\s+\d+(?:[.,]\d+)?|\bбет\w*\s*\d+",
+    re.IGNORECASE,
+)
+_ALWAYS_TERM_KEYS = ("min_deposit", "validity", "wager")
 
 
 def _term_value(value) -> str | None:
@@ -541,6 +579,80 @@ def _term_counts(value: str | None, dialogue: str) -> bool:
         return False
     found, _clock_at = _quote_hit(dialogue, value, _MANAGER_SPEAKERS, min_len=4)
     return found
+
+
+def _spoken_term_text(value) -> str | None:
+    """Вейджер «немає» — це озвучена умова. «n/a» для суми, терміну і вейджера не рахується."""
+    text = _term_value(value)
+    if not text or text == "n/a":
+        return None
+    return text
+
+
+def _client_line_bodies(dialogue: str) -> list[str]:
+    bodies = []
+    for raw in (dialogue or "").splitlines():
+        match = _QUOTE_LINE.match(raw.strip())
+        if match and match.group("speaker").lower() in _CLIENT_SPEAKERS:
+            bodies.append(match.group("body") or "")
+    return bodies
+
+
+def _dialogue_hesitation_quote(dialogue: str) -> str:
+    """Вагання клієнта. «Невигідний / нічого не дає» — заперечення, не вагання."""
+    for body in _client_line_bodies(dialogue):
+        if _BONUS_UNPROFITABLE.search(body):
+            continue
+        if _CLIENT_HESITATION.search(body):
+            return body.strip()
+    return ""
+
+
+def _dialogue_client_hesitates(dialogue: str) -> bool:
+    return bool(_dialogue_hesitation_quote(dialogue))
+
+
+def _fs_quote_complete(text: str) -> bool:
+    """Кількість FS і розмір ставки мають бути поруч, а не будь-яка сума депозиту."""
+    if not text:
+        return False
+    for match in _FS_COUNT.finditer(text):
+        start = max(0, match.start() - 40)
+        end = min(len(text), match.end() + 40)
+        if _FS_STAKE.search(text[start:end]):
+            return True
+    return False
+
+
+def _offer_includes_fs(*parts: str) -> bool:
+    blob = " ".join(part for part in parts if part)
+    if not blob or not _FS_MENTION.search(blob):
+        return False
+    if _FS_COUNT.search(blob):
+        return True
+    if _FS_ABSENT.search(blob):
+        return False
+    return True
+
+
+def _fs_blob(terms: dict, offer_parts: tuple[str, ...]) -> str:
+    fs_value = terms.get("fs_count_and_bet")
+    parts = []
+    if fs_value and fs_value != "n/a":
+        parts.append(str(fs_value))
+    parts.extend(part for part in offer_parts if part)
+    return " ".join(parts)
+
+
+def _fs_required(stated_flag: bool, terms: dict, offer_parts: tuple[str, ...]) -> bool:
+    if _offer_includes_fs(*offer_parts):
+        return True
+    fs_value = terms.get("fs_count_and_bet")
+    if fs_value == "n/a":
+        return False
+    if stated_flag:
+        return True
+    return bool(fs_value)
 
 
 def ground_bonus_offer(bonus: dict, dialogue: str) -> dict:
@@ -598,7 +710,19 @@ def ground_bonus_offer(bonus: dict, dialogue: str) -> dict:
         if value and value != "n/a" and not _term_counts(value, dialogue):
             terms[key] = None
     data["terms_stated"] = terms
-    data["all_terms_stated"] = all(_term_counts(terms[key], dialogue) for key in _TERM_KEYS)
+    offer_parts = (
+        str(data.get("first_deposit_bonus_quote") or ""),
+        str(data.get("first_no_deposit_bonus_quote") or ""),
+    )
+    fs_on = _fs_required(data.get("fs_applicable") is True, terms, offer_parts)
+    data["fs_applicable"] = fs_on
+    core_ok = all(_spoken_term_text(terms[key]) for key in _ALWAYS_TERM_KEYS)
+    fs_ok = _fs_quote_complete(_fs_blob(terms, offer_parts)) if fs_on else True
+    data["all_terms_stated"] = bool(core_ok and fs_ok)
+    if str(dialogue or "").strip():
+        hesitation = _dialogue_hesitation_quote(dialogue)
+        data["client_hesitates"] = bool(hesitation)
+        data["client_hesitation_quote"] = hesitation
     benefits = str(data.get("benefits_quote") or "")
     benefits_found, _benefits_clock = _quote_hit(dialogue, benefits, _MANAGER_SPEAKERS)
     data["benefits_explained"] = benefits_found
@@ -618,7 +742,23 @@ def ground_bonus_offer(bonus: dict, dialogue: str) -> dict:
     return data
 
 
-def score_bonus_offer(f: BonusOfferFacts) -> CriterionScore:
+def _bonus_terms_ok(f: BonusOfferFacts) -> bool:
+    """Сума, термін і вейджер завжди. FS — лише якщо вони в умовах бонусу."""
+    terms = f.terms_stated
+    offer = (f.first_deposit_bonus_quote or "", f.first_no_deposit_bonus_quote or "")
+    term_map = {"fs_count_and_bet": _term_value(terms.fs_count_and_bet)}
+    detailed = any(_term_value(getattr(terms, key)) for key in _TERM_KEYS) or _offer_includes_fs(*offer)
+    if not detailed:
+        return bool(f.all_terms_stated)
+    if not all(_spoken_term_text(getattr(terms, key)) for key in _ALWAYS_TERM_KEYS):
+        return False
+    if not _fs_required(bool(f.fs_applicable), term_map, offer):
+        return True
+    return _fs_quote_complete(_fs_blob(term_map, offer))
+
+
+def score_bonus_offer(f: BonusOfferFacts, dialogue: str = "") -> CriterionScore:
+    """5 балів за FRIENDLY_BONUS_FIVE_POINT_RULES. Смуги 0 і 2,5 лишаються."""
     if not f.deposit_bonus_offered_first or f.bonus_devalued:
         return CriterionScore(
             "bonus_offer",
@@ -626,16 +766,31 @@ def score_bonus_offer(f: BonusOfferFacts) -> CriterionScore:
             5.0,
             ["Не запропонував депозитний бонус першим / знецінив бонус"],
         )
+    hesitates = (
+        _dialogue_client_hesitates(dialogue)
+        if str(dialogue or "").strip()
+        else bool(f.client_hesitates)
+    )
     order_ok = (not f.no_deposit_bonus_applicable) or f.no_deposit_bonus_offered_after
     betking_ok = (not f.betking_x2_applicable) or f.betking_x2_booster_offered
-    checklist = [order_ok, f.all_terms_stated, f.benefits_explained, betking_ok]
-    if all(checklist):
+    benefits_ok = (not hesitates) or bool(f.benefits_explained)
+    terms_ok = _bonus_terms_ok(f)
+    if order_ok and terms_ok and benefits_ok and betking_ok:
         return CriterionScore("bonus_offer", 5.0, 5.0, [])
+    gaps = []
+    if not order_ok:
+        gaps.append("бездепозитний бонус, якщо він передбачений умовами")
+    if not terms_ok:
+        gaps.append("актуальні умови бонусу")
+    if not benefits_ok:
+        gaps.append("переваги, коли клієнт вагається")
+    if not betking_ok:
+        gaps.append("бустер Х2 для Betking")
     return CriterionScore(
         "bonus_offer",
         2.5,
         5.0,
-        ["Не озвучено одну з обов'язкових умов/переваг бонусу"],
+        ["Не озвучено одну з обов'язкових умов бонусу: " + "; ".join(gaps)],
     )
 
 
@@ -753,7 +908,7 @@ def score_vip_friendly(
         score_friendly_development(facts.friendly_development, dialogue),
         score_personal_approach(facts.personal_approach, dialogue),
         score_call_to_action(facts.call_to_action),
-        score_bonus_offer(facts.bonus_offer),
+        score_bonus_offer(facts.bonus_offer, dialogue),
         score_prep(facts.prep, ctx),
         score_quoted_closing(facts.closing) if facts.closing.quote_mode else score_closing(facts.closing, ctx),
         score_ease(facts.ease),
